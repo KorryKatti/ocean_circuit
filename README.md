@@ -2,8 +2,6 @@
 
 - a spreadsheet simulator
 
-The world map is a CSV spreadsheet — each cell is a tile, `.` is water, letters are land. Edit it in LibreOffice, the game reads it at runtime. Odin + Raylib + Dear ImGui.
-
 ## Build
 
 ```bash
