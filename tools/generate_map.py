@@ -185,20 +185,58 @@ def find_sea_facing_tiles(
     grid: List[List[str]],
     width: int,
     height: int,
+    ocean_tiles: Set[Tuple[int, int]],
 ) -> List[Tuple[int, int]]:
-    """Return island tiles that are adjacent to at least one water tile."""
+    """Return island tiles that are adjacent to ocean-connected water."""
     sea_facing: List[Tuple[int, int]] = []
 
     for x, y in cells:
         for nx, ny in get_neighbors(x, y):
-            if nx < 0 or nx >= width or ny < 0 or ny >= height:
-                sea_facing.append((x, y))
-                break
-            if grid[ny][nx] == ".":
+            if (nx, ny) in ocean_tiles:
                 sea_facing.append((x, y))
                 break
 
     return sea_facing
+
+
+def find_ocean_tiles(
+    grid: List[List[str]],
+    width: int,
+    height: int,
+) -> Set[Tuple[int, int]]:
+    """Find all water tiles connected to the map edge (ocean, not lakes)."""
+    ocean: Set[Tuple[int, int]] = set()
+    queue: deque[Tuple[int, int]] = deque()
+
+    # Seed from all edge water tiles
+    for x in range(width):
+        if grid[0][x] == ".":
+            queue.append((x, 0))
+            ocean.add((x, 0))
+        if grid[height - 1][x] == ".":
+            queue.append((x, height - 1))
+            ocean.add((x, height - 1))
+    for y in range(height):
+        if grid[y][0] == ".":
+            queue.append((0, y))
+            ocean.add((0, y))
+        if grid[y][width - 1] == ".":
+            queue.append((width - 1, y))
+            ocean.add((width - 1, y))
+
+    # BFS to find all connected water
+    while len(queue) > 0:
+        cx, cy = queue.popleft()
+        for nx, ny in get_neighbors(cx, cy):
+            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+                continue
+            if (nx, ny) in ocean:
+                continue
+            if grid[ny][nx] == ".":
+                ocean.add((nx, ny))
+                queue.append((nx, ny))
+
+    return ocean
 
 
 def group_coast_segments(sea_facing: List[Tuple[int, int]]) -> List[List[Tuple[int, int]]]:
@@ -231,12 +269,14 @@ def pick_port_positions(
     width: int,
     height: int,
     rng: random.Random,
+    ocean_tiles: Set[Tuple[int, int]],
 ) -> List[Tuple[int, int]]:
     """Pick port tile positions on the coast WITHOUT modifying the grid.
 
     Returns a list of (x, y) positions that should be rendered as ports.
+    Only places ports adjacent to ocean-connected water, not inland lakes.
     """
-    sea_facing: List[Tuple[int, int]] = find_sea_facing_tiles(cells, grid, width, height)
+    sea_facing: List[Tuple[int, int]] = find_sea_facing_tiles(cells, grid, width, height, ocean_tiles)
     if len(sea_facing) == 0:
         return []
 
@@ -315,14 +355,6 @@ def generate_map(
                 placed_centers.append((cx, cy))
                 all_cell_lists.append(cells)
 
-                if not is_spawn:
-                    ports: List[Tuple[int, int]] = pick_port_positions(
-                        cells, grid, width, height, rng,
-                    )
-                    all_port_lists.append(ports)
-                else:
-                    all_port_lists.append([])
-
                 success = True
                 break
 
@@ -330,6 +362,21 @@ def generate_map(
             print(f"Warning: could not place island {i} after 200 attempts", file=sys.stderr)
             all_cell_lists.append([])
             all_port_lists.append([])
+
+    # Compute ocean tiles once after all islands are placed
+    print("Computing ocean connectivity...")
+    ocean_tiles: Set[Tuple[int, int]] = find_ocean_tiles(grid, width, height)
+    print(f"  Found {len(ocean_tiles)} ocean-connected water tiles")
+
+    # Now pick port positions using ocean connectivity
+    for idx, cells in enumerate(all_cell_lists):
+        if len(cells) == 0:
+            all_port_lists.append([])
+            continue
+        ports: List[Tuple[int, int]] = pick_port_positions(
+            cells, grid, width, height, rng, ocean_tiles,
+        )
+        all_port_lists.append(ports)
 
     return grid, all_cell_lists, all_port_lists
 
@@ -400,7 +447,7 @@ def write_metadata_csv(
         ])
 
         for idx, (cells, resource) in enumerate(islands):
-            name: str = ISLAND_NAMES[idx % len(ISLAND_NAMES)]
+            name: str = "Spawn" if idx == 0 else ISLAND_NAMES[idx % len(ISLAND_NAMES)]
             if idx >= len(ISLAND_NAMES):
                 name += f" {idx // len(ISLAND_NAMES) + 1}"
 

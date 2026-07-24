@@ -239,19 +239,18 @@ load_map_csv :: proc(path: string, grid: ^MapGrid) -> bool {
 	row := 0
 	col := 0
 	for b in content {
-		switch b {
-		case '\n':
+		if b == '\n' {
 			for c := col; c < MAP_WIDTH; c += 1 {
 				grid.cells[row][c] = '.'
 			}
 			row += 1
 			col = 0
 			if row >= MAP_HEIGHT {break}
-		case '\r':
+		} else if b == '\r' {
 			// skip carriage return
-		case ',':
+		} else if b == ',' {
 			col += 1
-		default:
+		} else {
 			if row < MAP_HEIGHT && col < MAP_WIDTH {
 				grid.cells[row][col] = b
 			}
@@ -736,6 +735,14 @@ Player :: struct {
 	size:  f32,
 }
 
+// Ship is a moveable vessel that can only travel in water.
+Ship :: struct {
+	x:     f32,
+	y:     f32,
+	speed: f32,
+	angle: f32,
+}
+
 // App is the top-level game state — islands, grid, camera, economy, and player.
 App :: struct {
 	islands:      [MAX_ISLANDS]Island,
@@ -750,6 +757,7 @@ App :: struct {
 	scroll_x:     f32,
 	scroll_y:     f32,
 	player:       Player,
+	ship:         Ship,
 }
 
 // ---------------------------------------------------------------------------
@@ -824,10 +832,33 @@ main :: proc() {
 	if spawn_island < 0 && app.island_count > 0 {
 		spawn_island = 0
 	}
+
 	if spawn_island >= 0 && app.islands[spawn_island].tile_count > 0 {
+		// Place player on first tile
 		t := app.islands[spawn_island].tiles[0]
 		app.player.x = f32(t.gx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
 		app.player.y = f32(t.gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+
+		// Place ship on water adjacent to a port tile
+		app.ship.x = app.player.x
+		app.ship.y = app.player.y
+		app.ship.speed = 150
+		dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+		for ti in 0 ..< app.islands[spawn_island].tile_count {
+			if !app.islands[spawn_island].tiles[ti].is_port {continue}
+			px := app.islands[spawn_island].tiles[ti].gx
+			py := app.islands[spawn_island].tiles[ti].gy
+			for d in dirs {
+				wx := px + i32(d[0])
+				wy := py + i32(d[1])
+				if wx >= 0 && wx < i32(app.grid.width) && wy >= 0 && wy < i32(app.grid.height) && app.grid.cells[wy][wx] == '.' {
+					app.ship.x = f32(wx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					app.ship.y = f32(wy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					break
+				}
+			}
+			if is_water(&app.grid, app.ship.x, app.ship.y) {break}
+		}
 	}
 
 	// Camera: centred on player, half-zoom
@@ -847,6 +878,7 @@ main :: proc() {
 	// Main game loop
 	for !rl.WindowShouldClose() {
 		update_player(app)
+		update_ship(app)
 		update_camera(app)
 		app.time_day += rl.GetFrameTime() / 60.0
 
@@ -856,6 +888,7 @@ main :: proc() {
 		rl.BeginMode2D(app.camera)
 		draw_water(app)
 		draw_islands(app)
+		draw_ship(app)
 		draw_player(app)
 		rl.EndMode2D()
 
@@ -887,7 +920,7 @@ is_water :: proc(grid: ^MapGrid, world_x, world_y: f32) -> bool {
 }
 
 // update_player reads WASD input and moves the player, blocking
-// movement into non-water tiles. Arrow keys are reserved for camera.
+// movement into non-water tiles.
 update_player :: proc(app: ^App) {
 	dt := rl.GetFrameTime()
 	speed := app.player.speed * dt
@@ -909,6 +942,11 @@ update_player :: proc(app: ^App) {
 	if !is_water(&app.grid, app.player.x, new_y) {
 		app.player.y = new_y
 	}
+}
+
+// update_ship is currently unused — ship is static at port.
+update_ship :: proc(app: ^App) {
+	_ = app
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,13 +1083,29 @@ draw_islands :: proc(app: ^App) {
 	}
 }
 
-// draw_player renders the player as a red square at its current position.
+// draw_ship renders the ship as a pink rectangle, 3 tiles tall and 1 tile wide,
+// placed at the port. The ship is static — not controlled by the player.
+draw_ship :: proc(app: ^App) {
+	tile_f := f32(TILE_SIZE)
+	ship_w := tile_f
+	ship_h := tile_f * 3
+
+	origin := rl.Vector2{ship_w / 2, ship_h / 2}
+	rect := rl.Rectangle{
+		app.ship.x - origin.x,
+		app.ship.y - origin.y,
+		ship_w,
+		ship_h,
+	}
+
+	rl.DrawRectanglePro(rect, origin, app.ship.angle, {255, 100, 150, 255})
+	rl.DrawRectangleLinesEx(rect, 2, {200, 60, 100, 255})
+}
+
+// draw_player renders the player as a small red square at its center position.
 draw_player :: proc(app: ^App) {
 	s := app.player.size
-	x := app.player.x - s / 2
-	y := app.player.y - s / 2
-	rl.DrawRectangleV({x, y}, {s, s}, {220, 30, 30, 255})
-	rl.DrawRectangleLinesEx({x, y, s, s}, 2, {180, 10, 10, 255})
+	rl.DrawRectangleV({app.player.x - s / 2, app.player.y - s / 2}, {s, s}, {220, 30, 30, 255})
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,7 +1127,8 @@ draw_hud :: proc(app: ^App) {
 		imgui.Separator()
 		imgui.TextDisabled("WASD: move character")
 		imgui.TextDisabled("Scroll: zoom")
-		imgui.TextDisabled("Click: select island")
+		imgui.TextDisabled("Click: select island or ship")
+		imgui.TextDisabled("Scroll: zoom")
 	}
 	imgui.End()
 
@@ -1101,6 +1156,20 @@ draw_hud :: proc(app: ^App) {
 		}
 		imgui.End()
 	}
+
+	// Selected-ship detail panel
+	if app.selected == -2 {
+		imgui.SetNextWindowSize({280, 0}, .FirstUseEver)
+		imgui.SetNextWindowPos({10, 120}, .FirstUseEver)
+		if imgui.Begin("Ship") {
+			imgui.TextColored({1, 0.4, 0.6, 1}, "Explorer")
+			imgui.Separator()
+			imgui.TextDisabled("Ship to explore")
+			imgui.Separator()
+			imgui.Text("Speed: %.0f", app.ship.speed)
+		}
+		imgui.End()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,6 +1182,15 @@ handle_click :: proc(app: ^App) {
 	mouse := rl.GetScreenToWorld2D(rl.GetMousePosition(), app.camera)
 	app.selected = -1
 	tile_f := f32(TILE_SIZE)
+
+	// Check ship hit
+	ship_w := tile_f
+	ship_h := tile_f * 3
+	if mouse.x >= app.ship.x - ship_w / 2 && mouse.x <= app.ship.x + ship_w / 2 &&
+	   mouse.y >= app.ship.y - ship_h / 2 && mouse.y <= app.ship.y + ship_h / 2 {
+		app.selected = -2
+		return
+	}
 
 	for i in 0 ..< app.island_count {
 		island := &app.islands[i]
