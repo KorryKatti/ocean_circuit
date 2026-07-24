@@ -24,6 +24,8 @@ MAP_HEIGHT :: 3250
 
 MAP_CSV_PATH :: "assets/data/map.csv"
 META_CSV_PATH :: "assets/data/metadata.csv"
+PORTS_CSV_PATH :: "assets/data/ports.csv"
+ISLANDS_CSV_PATH :: "assets/data/islands.csv"
 
 // ---------------------------------------------------------------------------
 // Resource types
@@ -52,6 +54,10 @@ resource_colors := [?]rl.Color {
 	{0, 220, 200, 255},   // PORT
 }
 
+// PORT_COLOR — teal-ish brown, distinct from island resource colors.
+PORT_COLOR :: rl.Color{0, 180, 160, 255}
+PORT_HIGHLIGHT :: rl.Color{0, 220, 200, 255}
+
 // resource_from_char maps a single-character CSV code to its ResourceType.
 resource_from_char :: proc(c: byte) -> ResourceType {
 	switch c {
@@ -71,26 +77,28 @@ resource_from_char :: proc(c: byte) -> ResourceType {
 
 // Tile represents a single grid cell position in the map.
 Tile :: struct {
-	gx: i32,
-	gy: i32,
+	gx:      i32,
+	gy:      i32,
+	is_port: bool,
 }
 
 // Island holds all runtime state for a single island: its position,
 // production info, warehouse, dock level, and the list of tiles that
 // form its landmass.
 Island :: struct {
-	id:         int,
-	pos:        rl.Vector2,
-	name:       [32]u8,
-	name_len:   int,
-	production: ResourceType,
-	rate:       f32,
-	warehouse:  f32,
-	max_ware:   f32,
-	dock_level: int,
-	radius:     f32,
-	tiles:      [MAX_TILES]Tile,
-	tile_count: int,
+	id:          int,
+	pos:         rl.Vector2,
+	name:        [32]u8,
+	name_len:    int,
+	production:  ResourceType,
+	rate:        f32,
+	warehouse:   f32,
+	max_ware:    f32,
+	dock_level:  int,
+	radius:      f32,
+	tiles:       [MAX_TILES]Tile,
+	tile_count:  int,
+	port_count:  int,
 }
 
 // MapCell is a raw character from the CSV grid (reserved for future use).
@@ -378,11 +386,211 @@ load_metadata_csv :: proc(path: string, metas: ^[MAX_ISLANDS]IslandMeta, out_cou
 }
 
 // ---------------------------------------------------------------------------
+// Port loading — reads port positions from CSV and marks tiles
+// ---------------------------------------------------------------------------
+
+// load_ports_csv reads port positions (island_id, x, y) and marks
+// matching tiles as is_port on the corresponding island.
+load_ports_csv :: proc(path: string, islands: ^[MAX_ISLANDS]Island, island_count: int) {
+	content := read_file(path)
+	if len(content) == 0 {return}
+	defer delete(content)
+
+	row := 0
+	line_start := 0
+	is_header := true
+
+	for i := 0; i <= len(content); i += 1 {
+		is_end := i == len(content)
+		is_newline := false
+		if !is_end {
+			is_newline = content[i] == '\n' || content[i] == '\r'
+		}
+
+		if is_end || is_newline {
+			if i > line_start && !is_header {
+				line := content[line_start:i]
+
+				all_whitespace := true
+				for b in line {
+					if b != ' ' && b != '\t' {
+						all_whitespace = false
+						break
+					}
+				}
+
+				if !all_whitespace {
+					fields: [16]CsvField
+					field_count := split_csv_fields(line, fields[:])
+
+					if field_count >= 3 {
+						island_id := 0
+						px := 0
+						py := 0
+
+						if v, ok := parse_int(line[fields[0].start:fields[0].end]); ok {
+							island_id = v
+						}
+						if v, ok := parse_int(line[fields[1].start:fields[1].end]); ok {
+							px = v
+						}
+						if v, ok := parse_int(line[fields[2].start:fields[2].end]); ok {
+							py = v
+						}
+
+						// Mark the tile as port if island is in range
+						if island_id >= 0 && island_id < island_count {
+							island := &islands[island_id]
+							for t in 0 ..< island.tile_count {
+								if island.tiles[t].gx == i32(px) && island.tiles[t].gy == i32(py) {
+									island.tiles[t].is_port = true
+									island.port_count += 1
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if is_header {is_header = false}
+
+			if !is_end && content[i] == '\r' && i + 1 < len(content) && content[i + 1] == '\n' {
+				line_start = i + 2
+			} else {
+				line_start = i + 1
+			}
+		}
+	}
+}
+
+// load_islands_csv reads island tile assignments (island_id, x, y)
+// and populates the Island structs directly — no flood fill needed.
+// Returns the number of islands loaded.
+load_islands_csv :: proc(
+	path: string,
+	grid: ^MapGrid,
+	islands: ^[MAX_ISLANDS]Island,
+) -> int {
+	content := read_file(path)
+	if len(content) == 0 {return 0}
+	defer delete(content)
+
+	island_count := 0
+	row := 0
+	line_start := 0
+	is_header := true
+
+	for i := 0; i <= len(content); i += 1 {
+		is_end := i == len(content)
+		is_newline := false
+		if !is_end {
+			is_newline = content[i] == '\n' || content[i] == '\r'
+		}
+
+		if is_end || is_newline {
+			if i > line_start && !is_header {
+				line := content[line_start:i]
+
+				all_whitespace := true
+				for b in line {
+					if b != ' ' && b != '\t' {
+						all_whitespace = false
+						break
+					}
+				}
+
+				if !all_whitespace {
+					fields: [16]CsvField
+					field_count := split_csv_fields(line, fields[:])
+
+					if field_count >= 3 {
+						island_id := 0
+						px := 0
+						py := 0
+
+						if v, ok := parse_int(line[fields[0].start:fields[0].end]); ok {
+							island_id = v
+						}
+						if v, ok := parse_int(line[fields[1].start:fields[1].end]); ok {
+							px = v
+						}
+						if v, ok := parse_int(line[fields[2].start:fields[2].end]); ok {
+							py = v
+						}
+
+						if island_id >= 0 && island_id < MAX_ISLANDS {
+							island := &islands[island_id]
+
+							// Initialize island on first tile
+							if island.tile_count == 0 {
+								island.id = island_id
+								island.production = resource_from_char(grid.cells[py][px])
+								island.warehouse = 0
+								island.port_count = 0
+								if island_id > island_count {
+									island_count = island_id
+								}
+							}
+
+							if island.tile_count < MAX_TILES {
+								island.tiles[island.tile_count] = {i32(px), i32(py), false}
+								island.tile_count += 1
+							}
+						}
+					}
+				}
+			}
+
+			if is_header {is_header = false}
+
+			if !is_end && content[i] == '\r' && i + 1 < len(content) && content[i + 1] == '\n' {
+				line_start = i + 2
+			} else {
+				line_start = i + 1
+			}
+		}
+	}
+
+	// Compute center, radius, and count for each island
+	for i in 0 ..< island_count + 1 {
+		island := &islands[i]
+		if island.tile_count == 0 {continue}
+
+		min_x := island.tiles[0].gx
+		max_x := island.tiles[0].gx
+		min_y := island.tiles[0].gy
+		max_y := island.tiles[0].gy
+
+		for t in 1 ..< island.tile_count {
+			tx := island.tiles[t].gx
+			ty := island.tiles[t].gy
+			if tx < min_x {min_x = tx}
+			if tx > max_x {max_x = tx}
+			if ty < min_y {min_y = ty}
+			if ty > max_y {max_y = ty}
+		}
+
+		center_x := f32(min_x + max_x) / 2.0 * f32(TILE_SIZE)
+		center_y := f32(min_y + max_y) / 2.0 * f32(TILE_SIZE)
+		island.pos = {center_x, center_y}
+
+		half_w := f32(max_x - min_x) / 2.0 * f32(TILE_SIZE)
+		half_h := f32(max_y - min_y) / 2.0 * f32(TILE_SIZE)
+		island.radius = math.max(half_w, half_h)
+	}
+
+	return island_count + 1
+}
+
+// ---------------------------------------------------------------------------
 // Flood fill — groups contiguous grid cells into islands
 // ---------------------------------------------------------------------------
 
 // flood_fill_islands scans the grid and uses BFS to group adjacent
-// non-water cells into distinct islands. Returns the number of islands found.
+// non-water cells into distinct islands. Port positions are loaded
+// separately from a ports CSV — no 'P' tiles in the grid.
+// Returns the number of islands found.
 flood_fill_islands :: proc(
 	grid: ^MapGrid,
 	islands: ^[MAX_ISLANDS]Island,
@@ -405,12 +613,14 @@ flood_fill_islands :: proc(
 			if grid.cells[y][x] == '.' {continue}
 			if island_count >= MAX_ISLANDS {break}
 
-			resource := resource_from_char(grid.cells[y][x])
+			start_char := grid.cells[y][x]
+			resource := resource_from_char(start_char)
 
 			island := &islands[island_count]
 			island.id = island_count
 			island.production = resource
 			island.warehouse = 0
+			island.port_count = 0
 
 			// BFS queue
 			queue: [MAX_TILES][2]int
@@ -429,7 +639,7 @@ flood_fill_islands :: proc(
 				cy := queue[head][1]
 				head += 1
 
-				island.tiles[island.tile_count] = {i32(cx), i32(cy)}
+				island.tiles[island.tile_count] = {i32(cx), i32(cy), false}
 				island.tile_count += 1
 
 				if cx < min_x {min_x = cx}
@@ -444,7 +654,7 @@ flood_fill_islands :: proc(
 						continue
 					}
 					if visited_at(visited_data, nx, ny)^ {continue}
-					if grid.cells[ny][nx] != grid.cells[y][x] {continue}
+					if grid.cells[ny][nx] != start_char {continue}
 
 					visited_at(visited_data, nx, ny)^ = true
 					if tail < MAX_TILES {
@@ -569,13 +779,34 @@ main :: proc() {
 		return
 	}
 
-	// Load island metadata
+	// Load island tiles from CSV (no flood fill needed)
+	app.island_count = load_islands_csv(ISLANDS_CSV_PATH, &app.grid, &app.islands)
+
+	// Load metadata (names, rates, dock levels)
 	metas: [MAX_ISLANDS]IslandMeta
 	meta_count: int
 	load_metadata_csv(META_CSV_PATH, &metas, &meta_count)
 
-	// Build islands from the tile grid
-	app.island_count = flood_fill_islands(&app.grid, &app.islands, metas, meta_count)
+	// Apply metadata to islands
+	for i in 0 ..< app.island_count {
+		island := &app.islands[i]
+		for m in 0 ..< meta_count {
+			if metas[m].id == island.id {
+				island.production = metas[m].production
+				island.rate = metas[m].rate
+				island.max_ware = metas[m].max_ware
+				island.dock_level = metas[m].dock_level
+				for j in 0 ..< metas[m].name_len {
+					island.name[j] = metas[m].name[j]
+				}
+				island.name_len = metas[m].name_len
+				break
+			}
+		}
+	}
+
+	// Load port positions and mark tiles
+	load_ports_csv(PORTS_CSV_PATH, &app.islands, app.island_count)
 
 	app.money = 1000
 	app.selected = -1
@@ -611,7 +842,7 @@ main :: proc() {
 
 	app.bg_color = {10, 20, 50, 255}
 
-	fmt.printf("Loaded %d islands from %s\n", app.island_count, MAP_CSV_PATH)
+	fmt.printf("Loaded %d islands from %s\n", app.island_count, ISLANDS_CSV_PATH)
 
 	// Main game loop
 	for !rl.WindowShouldClose() {
@@ -655,18 +886,18 @@ is_water :: proc(grid: ^MapGrid, world_x, world_y: f32) -> bool {
 	return grid.cells[gy][gx] == '.'
 }
 
-// update_player reads WASD/arrow input and moves the player, blocking
-// movement into non-water tiles.
+// update_player reads WASD input and moves the player, blocking
+// movement into non-water tiles. Arrow keys are reserved for camera.
 update_player :: proc(app: ^App) {
 	dt := rl.GetFrameTime()
 	speed := app.player.speed * dt
 	dx: f32 = 0
 	dy: f32 = 0
 
-	if rl.IsKeyDown(.W) || rl.IsKeyDown(.UP)    {dy -= speed}
-	if rl.IsKeyDown(.S) || rl.IsKeyDown(.DOWN)  {dy += speed}
-	if rl.IsKeyDown(.A) || rl.IsKeyDown(.LEFT)  {dx -= speed}
-	if rl.IsKeyDown(.D) || rl.IsKeyDown(.RIGHT) {dx += speed}
+	if rl.IsKeyDown(.W) {dy -= speed}
+	if rl.IsKeyDown(.S) {dy += speed}
+	if rl.IsKeyDown(.A) {dx -= speed}
+	if rl.IsKeyDown(.D) {dx += speed}
 
 	// Try X then Y independently so diagonal movement slides along walls
 	new_x := app.player.x + dx
@@ -681,18 +912,18 @@ update_player :: proc(app: ^App) {
 }
 
 // ---------------------------------------------------------------------------
-// Camera — follows player with scroll-wheel zoom
+// Camera — free-form panning with arrow keys, zoom with scroll wheel
 // ---------------------------------------------------------------------------
 
 // update_camera centres the camera on the player and adjusts zoom
-// with the mouse wheel (clamped to 0.25–1.5).
+// with the mouse wheel (clamped to 0.5–1.5).
 update_camera :: proc(app: ^App) {
 	app.camera.target = {app.player.x, app.player.y}
 
 	wheel := rl.GetMouseWheelMove()
 	if wheel != 0 {
 		app.camera.zoom += wheel * 0.05
-		if app.camera.zoom < 0.25 {app.camera.zoom = 0.25}
+		if app.camera.zoom < 0.5 {app.camera.zoom = 0.5}
 		if app.camera.zoom > 1.5  {app.camera.zoom = 1.5}
 	}
 }
@@ -741,45 +972,27 @@ draw_water :: proc(app: ^App) {
 	}
 }
 
-// draw_islands renders every island's tiles (with selection highlight)
-// and labels. Only the island the player is standing on bypasses
-// viewport culling so it never flickers out.
+// draw_islands renders every island's tiles and labels.
+// Viewport culling skips tiles outside the camera view for performance.
 draw_islands :: proc(app: ^App) {
 	vp_min_x, vp_min_y, vp_max_x, vp_max_y := get_viewport(app)
 	tile_f := f32(TILE_SIZE)
 
-	// Determine which island the player occupies
-	player_island := -1
-	pgx := int(app.player.x / tile_f)
-	pgy := int(app.player.y / tile_f)
-	for i in 0 ..< app.island_count {
-		island := &app.islands[i]
-		for t in 0 ..< island.tile_count {
-			if island.tiles[t].gx == i32(pgx) && island.tiles[t].gy == i32(pgy) {
-				player_island = i
-				break
-			}
-		}
-		if player_island >= 0 {break}
-	}
-
 	for i in 0 ..< app.island_count {
 		island := &app.islands[i]
 		color := resource_colors[island.production]
-		is_current := i == player_island
 
-		// Bounding-box cull for non-current islands
-		if !is_current {
-			island_min_x := island.pos.x - island.radius - tile_f
-			island_max_x := island.pos.x + island.radius + tile_f
-			island_min_y := island.pos.y - island.radius - tile_f
-			island_max_y := island.pos.y + island.radius + tile_f
-			if island_max_x < vp_min_x ||
-			   island_min_x > vp_max_x ||
-			   island_max_y < vp_min_y ||
-			   island_min_y > vp_max_y {
-				continue
-			}
+		// Bounding-box cull entire island if off-screen (with buffer)
+		buffer := tile_f * 2
+		island_min_x := island.pos.x - island.radius - buffer
+		island_max_x := island.pos.x + island.radius + buffer
+		island_min_y := island.pos.y - island.radius - buffer
+		island_max_y := island.pos.y + island.radius + buffer
+		if island_max_x < vp_min_x ||
+		   island_min_x > vp_max_x ||
+		   island_max_y < vp_min_y ||
+		   island_min_y > vp_max_y {
+			continue
 		}
 
 		// Draw tiles
@@ -787,12 +1000,6 @@ draw_islands :: proc(app: ^App) {
 			tile := &island.tiles[t]
 			x := f32(tile.gx) * tile_f
 			y := f32(tile.gy) * tile_f
-
-			if !is_current {
-				if x + tile_f < vp_min_x || x > vp_max_x || y + tile_f < vp_min_y || y > vp_max_y {
-					continue
-				}
-			}
 
 			// Selection glow
 			if app.selected == i {
@@ -805,17 +1012,22 @@ draw_islands :: proc(app: ^App) {
 				)
 			}
 
-			rl.DrawRectangleV({x, y}, {tile_f, tile_f}, color)
+			// Port tiles get a distinct colour; resource tiles keep theirs
+			tile_color := color
+			if tile.is_port {
+				tile_color = PORT_COLOR
+			}
+
+			rl.DrawRectangleV({x, y}, {tile_f, tile_f}, tile_color)
 			rl.DrawRectangleLinesEx({x, y, tile_f, tile_f}, 2, {20, 20, 20, 200})
 		}
 
-		// Name + resource labels (only when roughly on-screen)
+		// Labels (only when roughly on-screen)
 		if island.pos.x >= vp_min_x - 200 &&
 		   island.pos.x <= vp_max_x + 200 &&
 		   island.pos.y >= vp_min_y - 100 &&
 		   island.pos.y <= vp_max_y + 100 {
 
-			// Island name (with drop shadow)
 			name := get_name(island^)
 			text_w := rl.MeasureText(name, 32)
 			name_x := i32(island.pos.x) - text_w / 2
@@ -823,7 +1035,6 @@ draw_islands :: proc(app: ^App) {
 			rl.DrawText(name, name_x + 2, name_y + 2, 32, {0, 0, 0, 200})
 			rl.DrawText(name, name_x, name_y, 32, {255, 255, 255, 255})
 
-			// Resource label (with drop shadow)
 			res_name := resource_names[island.production]
 			res_w := rl.MeasureText(res_name, 24)
 			res_x := i32(island.pos.x) - res_w / 2
@@ -858,9 +1069,11 @@ draw_hud :: proc(app: ^App) {
 		imgui.Text("Islands: %d", app.island_count)
 		imgui.TextColored({0.2, 1, 0.2, 1}, "Money: $%d", i32(app.money))
 		imgui.Text("Day: %.1f", app.time_day)
+		imgui.Text("Zoom: %.0f%%", app.camera.zoom * 100)
 		imgui.Separator()
-		imgui.TextDisabled("WASD/Arrows: move")
+		imgui.TextDisabled("WASD: move character")
 		imgui.TextDisabled("Scroll: zoom")
+		imgui.TextDisabled("Click: select island")
 	}
 	imgui.End()
 
@@ -879,6 +1092,12 @@ draw_hud :: proc(app: ^App) {
 			imgui.Text("Storage: %.0f / %.0f", island.warehouse, island.max_ware)
 			imgui.Text("Dock Level: %d", island.dock_level)
 			imgui.Text("Tiles: %d", island.tile_count)
+
+			if island.port_count > 0 {
+				imgui.Separator()
+				imgui.TextColored({0, 0.9, 0.8, 1}, "Port Tiles: %d", island.port_count)
+				imgui.TextDisabled("Docks along the coast")
+			}
 		}
 		imgui.End()
 	}
