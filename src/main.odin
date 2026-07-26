@@ -1,3 +1,4 @@
+#+feature dynamic-literals
 package main
 
 // Ocean Circuit — A naval shipping economy game.
@@ -45,13 +46,13 @@ ResourceType :: enum {
 resource_names := [?]cstring{"Wood", "Fish", "Ore", "Metal", "Oil", "Luxury", "Port"}
 
 resource_colors := [?]rl.Color {
-	{139, 90, 43, 255},   // WOOD
-	{70, 130, 180, 255},  // FISH
+	{139, 90, 43, 255}, // WOOD
+	{70, 130, 180, 255}, // FISH
 	{128, 128, 128, 255}, // ORE
 	{192, 192, 192, 255}, // METAL
-	{30, 30, 30, 255},    // OIL
-	{255, 215, 0, 255},   // LUXURY
-	{0, 220, 200, 255},   // PORT
+	{30, 30, 30, 255}, // OIL
+	{255, 215, 0, 255}, // LUXURY
+	{0, 220, 200, 255}, // PORT
 }
 
 // PORT_COLOR — teal-ish brown, distinct from island resource colors.
@@ -61,13 +62,20 @@ PORT_HIGHLIGHT :: rl.Color{0, 220, 200, 255}
 // resource_from_char maps a single-character CSV code to its ResourceType.
 resource_from_char :: proc(c: byte) -> ResourceType {
 	switch c {
-	case 'W': return .WOOD
-	case 'F': return .FISH
-	case 'O': return .ORE
-	case 'M': return .METAL
-	case 'L': return .LUXURY
-	case 'P': return .PORT
-	case:    return .ORE
+	case 'W':
+		return .WOOD
+	case 'F':
+		return .FISH
+	case 'O':
+		return .ORE
+	case 'M':
+		return .METAL
+	case 'L':
+		return .LUXURY
+	case 'P':
+		return .PORT
+	case:
+		return .ORE
 	}
 }
 
@@ -86,19 +94,19 @@ Tile :: struct {
 // production info, warehouse, dock level, and the list of tiles that
 // form its landmass.
 Island :: struct {
-	id:          int,
-	pos:         rl.Vector2,
-	name:        [32]u8,
-	name_len:    int,
-	production:  ResourceType,
-	rate:        f32,
-	warehouse:   f32,
-	max_ware:    f32,
-	dock_level:  int,
-	radius:      f32,
-	tiles:       [MAX_TILES]Tile,
-	tile_count:  int,
-	port_count:  int,
+	id:         int,
+	pos:        rl.Vector2,
+	name:       [32]u8,
+	name_len:   int,
+	production: ResourceType,
+	rate:       f32,
+	warehouse:  f32,
+	max_ware:   f32,
+	dock_level: int,
+	radius:     f32,
+	tiles:      [MAX_TILES]Tile,
+	tile_count: int,
+	port_count: int,
 }
 
 // MapCell is a raw character from the CSV grid (reserved for future use).
@@ -466,11 +474,7 @@ load_ports_csv :: proc(path: string, islands: ^[MAX_ISLANDS]Island, island_count
 // load_islands_csv reads island tile assignments (island_id, x, y)
 // and populates the Island structs directly — no flood fill needed.
 // Returns the number of islands loaded.
-load_islands_csv :: proc(
-	path: string,
-	grid: ^MapGrid,
-	islands: ^[MAX_ISLANDS]Island,
-) -> int {
+load_islands_csv :: proc(path: string, grid: ^MapGrid, islands: ^[MAX_ISLANDS]Island) -> int {
 	content := read_file(path)
 	if len(content) == 0 {return 0}
 	defer delete(content)
@@ -735,29 +739,106 @@ Player :: struct {
 	size:  f32,
 }
 
+// types of water vehicles
+ShipTypes :: enum {
+	EXPLORER_SHIP,
+	SMALL_CARGO_SHIP,
+	MEDIUM_CARGO_SHIP,
+	LARGE_CARGO_SHIP,
+	ASSIST_SMALL_WAR_SHIP,
+	ASSIST_MEDIUM_WAR_SHIP,
+	ASSIST_LARGE_WAR_SHIP,
+	EXPLORER_MEDIUM_SHIP,
+	FISHING_SHIP,
+	OIL_SHIP_SMALL,
+	OIL_SHIP_MEDIUM,
+	OIL_SHIP_LARGE,
+	SUPPLIES_SMALL_SHIP,
+	SUPPLIES_MEDIUM_SHIP,
+	SUPPLIES_LARGE_SHIP,
+	PATROL_BOARD,
+	FRIGATE,
+	DESTROYER,
+	CRUISER,
+	BATTLESHIP,
+	PIRATE_SHIP_SMALL, // cannot be owned by player
+	PIRATE_SHIP_MEDIUM, // cannot be owned by player
+	PIRATE_SHIP_LARGE, // cannot be owned by player
+}
+
+// ShipStats holds the base attributes for each ship type.
+// Indexed by ShipTypes — add new variants at the matching position.
+ShipStats :: struct {
+	health:        f32,
+	value:         f32,
+	speed:         f32, // world-units per second
+	cargo_space:   f32, // cargo capacity
+	fuel_capacity: f32, // maximum fuel storage
+	sensor_range:  f32, // detection/exploration range
+}
+
+// ship_stats is the single source of truth for all ship base stats.
+// health, value, speed, cargo, fuel, sensors
+ship_stats := map[ShipTypes]ShipStats {
+	.EXPLORER_SHIP          = {100, 0, 180, 50, 100, 1000}, // fast scout
+	.SMALL_CARGO_SHIP       = {140, 5_000, 120, 500, 900, 300},
+	.MEDIUM_CARGO_SHIP      = {180, 18_000, 100, 1500, 1500, 400},
+	.LARGE_CARGO_SHIP       = {240, 60_000, 70, 5000, 3000, 500}, // slow but massive hold
+	.ASSIST_SMALL_WAR_SHIP  = {300, 10_000, 140, 150, 10, 700},
+	.ASSIST_MEDIUM_WAR_SHIP = {600, 35_000, 120, 300, 200, 800},
+	.ASSIST_LARGE_WAR_SHIP  = {1000, 120_000, 100, 600, 300, 1000},
+	.EXPLORER_MEDIUM_SHIP   = {170, 15_000, 160, 300, 200, 1200},
+	.FISHING_SHIP           = {120, 0, 120, 800, 800, 250},
+	.OIL_SHIP_SMALL         = {180, 50_000, 100, 2000, 1500, 300},
+	.OIL_SHIP_MEDIUM        = {220, 150_000, 85, 6000, 3000, 350},
+	.OIL_SHIP_LARGE         = {280, 500_000, 70, 15000, 6000, 400},
+	.SUPPLIES_SMALL_SHIP    = {130, 8_000, 130, 700, 1000, 300},
+	.SUPPLIES_MEDIUM_SHIP   = {170, 30_000, 110, 2500, 2000, 350},
+	.SUPPLIES_LARGE_SHIP    = {220, 100_000, 90, 7000, 4000, 400},
+	.PATROL_BOARD           = {220, 7_500, 150, 100, 90, 600},
+	.FRIGATE                = {500, 80_000, 160, 250, 150, 900},
+	.DESTROYER              = {900, 220_000, 140, 400, 250, 1000},
+	.CRUISER                = {1500, 450_000, 120, 800, 400, 1200},
+	.BATTLESHIP             = {2500, 1_000_000, 60, 1000, 800, 1500},
+	.PIRATE_SHIP_SMALL      = {150, 0, 130, 300, 700, 400},
+	.PIRATE_SHIP_MEDIUM     = {350, 0, 110, 800, 1500, 500},
+	.PIRATE_SHIP_LARGE      = {700, 0, 90, 2000, 2500, 600},
+}
+
+// unassisted ships have risk of death
+// even when assisted the damage will be divided into percentages,
+// e.g. small cargo assisted by small assist: assist takes 60% damage, cargo 40%.
+// bigger assist ships guarantee better ratios.
+
 // Ship is a moveable vessel that can only travel in water.
 Ship :: struct {
-	x:     f32,
-	y:     f32,
-	speed: f32,
-	angle: f32,
+	x:      f32,
+	y:      f32,
+	speed:  f32,
+	angle:  f32, // TODO : remove this
+	type:   ShipTypes,
+	health: f32,
+	value:  f32,
 }
+
+MAX_SHIPS :: 64
 
 // App is the top-level game state — islands, grid, camera, economy, and player.
 App :: struct {
-	islands:      [MAX_ISLANDS]Island,
-	island_count: int,
-	grid:         MapGrid,
-	camera:       rl.Camera2D,
-	selected:     int,
-	money:        f32,
-	time_day:     f32,
-	scroll_tex:   rl.Texture2D,
-	bg_color:     rl.Color,
-	scroll_x:     f32,
-	scroll_y:     f32,
-	player:       Player,
-	ship:         Ship,
+	islands:       [MAX_ISLANDS]Island,
+	island_count:  int,
+	grid:          MapGrid,
+	camera:        rl.Camera2D,
+	selected:      int,
+	money:         f32,
+	time_day:      f32,
+	scroll_tex:    rl.Texture2D,
+	bg_color:      rl.Color,
+	scroll_x:      f32,
+	scroll_y:      f32,
+	player:        Player,
+	ships:         [MAX_SHIPS]Ship,
+	world_economy: f32, // used to calculate total trading in game , we already have user money so percentage can be calculated via it.
 }
 
 // ---------------------------------------------------------------------------
@@ -840,9 +921,12 @@ main :: proc() {
 		app.player.y = f32(t.gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
 
 		// Place ship on water adjacent to a port tile
-		app.ship.x = app.player.x
-		app.ship.y = app.player.y
-		app.ship.speed = 150
+		app.ships[0].x = app.player.x
+		app.ships[0].y = app.player.y
+		app.ships[0].type = .EXPLORER_SHIP
+		app.ships[0].health = ship_stats[.EXPLORER_SHIP].health
+		app.ships[0].value = ship_stats[.EXPLORER_SHIP].value
+		app.ships[0].speed = ship_stats[.EXPLORER_SHIP].speed
 		dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 		for ti in 0 ..< app.islands[spawn_island].tile_count {
 			if !app.islands[spawn_island].tiles[ti].is_port {continue}
@@ -851,13 +935,17 @@ main :: proc() {
 			for d in dirs {
 				wx := px + i32(d[0])
 				wy := py + i32(d[1])
-				if wx >= 0 && wx < i32(app.grid.width) && wy >= 0 && wy < i32(app.grid.height) && app.grid.cells[wy][wx] == '.' {
-					app.ship.x = f32(wx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-					app.ship.y = f32(wy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+				if wx >= 0 &&
+				   wx < i32(app.grid.width) &&
+				   wy >= 0 &&
+				   wy < i32(app.grid.height) &&
+				   app.grid.cells[wy][wx] == '.' {
+					app.ships[0].x = f32(wx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					app.ships[0].y = f32(wy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
 					break
 				}
 			}
-			if is_water(&app.grid, app.ship.x, app.ship.y) {break}
+			if is_water(&app.grid, app.ships[0].x, app.ships[0].y) {break}
 		}
 	}
 
@@ -962,7 +1050,7 @@ update_camera :: proc(app: ^App) {
 	if wheel != 0 {
 		app.camera.zoom += wheel * 0.05
 		if app.camera.zoom < 0.5 {app.camera.zoom = 0.5}
-		if app.camera.zoom > 1.5  {app.camera.zoom = 1.5}
+		if app.camera.zoom > 1.5 {app.camera.zoom = 1.5}
 	}
 }
 
@@ -1091,14 +1179,9 @@ draw_ship :: proc(app: ^App) {
 	ship_h := tile_f * 3
 
 	origin := rl.Vector2{ship_w / 2, ship_h / 2}
-	rect := rl.Rectangle{
-		app.ship.x - origin.x,
-		app.ship.y - origin.y,
-		ship_w,
-		ship_h,
-	}
+	rect := rl.Rectangle{app.ships[0].x - origin.x, app.ships[0].y - origin.y, ship_w, ship_h}
 
-	rl.DrawRectanglePro(rect, origin, app.ship.angle, {255, 100, 150, 255})
+	rl.DrawRectanglePro(rect, origin, app.ships[0].angle, {255, 100, 150, 255})
 	rl.DrawRectangleLinesEx(rect, 2, {200, 60, 100, 255})
 }
 
@@ -1162,11 +1245,12 @@ draw_hud :: proc(app: ^App) {
 		imgui.SetNextWindowSize({280, 0}, .FirstUseEver)
 		imgui.SetNextWindowPos({10, 120}, .FirstUseEver)
 		if imgui.Begin("Ship") {
-			imgui.TextColored({1, 0.4, 0.6, 1}, "Explorer")
+			stats := ship_stats[app.ships[0].type]
+			imgui.TextColored({1, 0.4, 0.6, 1}, "%v", app.ships[0].type)
 			imgui.Separator()
-			imgui.TextDisabled("Ship to explore")
-			imgui.Separator()
-			imgui.Text("Speed: %.0f", app.ship.speed)
+			imgui.Text("Health: %.0f / %.0f", app.ships[0].health, stats.health)
+			imgui.Text("Speed: %.0f", app.ships[0].speed)
+			imgui.Text("Value: $%d", i32(stats.value))
 		}
 		imgui.End()
 	}
@@ -1186,8 +1270,10 @@ handle_click :: proc(app: ^App) {
 	// Check ship hit
 	ship_w := tile_f
 	ship_h := tile_f * 3
-	if mouse.x >= app.ship.x - ship_w / 2 && mouse.x <= app.ship.x + ship_w / 2 &&
-	   mouse.y >= app.ship.y - ship_h / 2 && mouse.y <= app.ship.y + ship_h / 2 {
+	if mouse.x >= app.ships[0].x - ship_w / 2 &&
+	   mouse.x <= app.ships[0].x + ship_w / 2 &&
+	   mouse.y >= app.ships[0].y - ship_h / 2 &&
+	   mouse.y <= app.ships[0].y + ship_h / 2 {
 		app.selected = -2
 		return
 	}
@@ -1198,8 +1284,7 @@ handle_click :: proc(app: ^App) {
 			tile := &island.tiles[t]
 			tx := f32(tile.gx) * tile_f
 			ty := f32(tile.gy) * tile_f
-			if mouse.x >= tx && mouse.x <= tx + tile_f &&
-			   mouse.y >= ty && mouse.y <= ty + tile_f {
+			if mouse.x >= tx && mouse.x <= tx + tile_f && mouse.y >= ty && mouse.y <= ty + tile_f {
 				app.selected = i
 				return
 			}
