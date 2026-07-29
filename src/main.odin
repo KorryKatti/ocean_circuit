@@ -10,7 +10,6 @@ import rlimgui "../lib/imgui_impl_raylib"
 import imgui "../lib/odin-imgui"
 import "core:fmt"
 import "core:math"
-import "core:os"
 import rl "vendor:raylib"
 
 // ---------------------------------------------------------------------------
@@ -85,8 +84,8 @@ resource_from_char :: proc(c: byte) -> ResourceType {
 
 // Tile represents a single grid cell position in the map.
 Tile :: struct {
-	gx:      i32,
-	gy:      i32,
+	gx:      i32, // grid-x coordinate in the tile grid
+	gy:      i32, // grid-y coordinate in the tile grid
 	is_port: bool,
 }
 
@@ -119,471 +118,6 @@ MapGrid :: struct {
 	cells:  [MAP_HEIGHT][MAP_WIDTH]byte,
 	width:  int,
 	height: int,
-}
-
-// ---------------------------------------------------------------------------
-// CSV loading — fully manual, no library dependencies
-// ---------------------------------------------------------------------------
-
-// read_file reads an entire file into a heap-allocated buffer.
-// Returns nil on error.
-read_file :: proc(path: string) -> (data: []byte) {
-	handle, err := os.open(path)
-	if err != nil {return nil}
-	defer os.close(handle)
-
-	buf := make([]byte, 64 * 1024 * 1024)
-	total := 0
-	for {
-		n, read_err := os.read(handle, buf[total:])
-		total += n
-		if read_err != nil || n == 0 {break}
-	}
-	return buf[:total]
-}
-
-// parse_int parses a simple ASCII integer from a byte slice (supports negative).
-parse_int :: proc(s: []byte) -> (v: int, ok: bool) {
-	if len(s) == 0 {return 0, false}
-
-	i := 0
-	negative := false
-	if s[0] == '-' {
-		negative = true
-		i = 1
-	}
-
-	result := 0
-	found_digit := false
-	for j := i; j < len(s); j += 1 {
-		c := s[j]
-		if c < '0' || c > '9' {break}
-		result = result * 10 + int(c - '0')
-		found_digit = true
-	}
-
-	if !found_digit {return 0, false}
-	if negative {result = -result}
-	return result, true
-}
-
-// parse_f32 parses a simple ASCII float (e.g. "2.5", "120") from a byte slice.
-parse_f32 :: proc(s: []byte) -> (v: f32, ok: bool) {
-	if len(s) == 0 {return 0, false}
-
-	str := string(s)
-	negative := false
-	i := 0
-	if str[0] == '-' {
-		negative = true
-		i = 1
-	}
-
-	whole := 0
-	decimal := 0
-	divisor := f32(1)
-	found_digit := false
-
-	for j := i; j < len(str); j += 1 {
-		c := str[j]
-		if c == '.' {
-			for k := j + 1; k < len(str); k += 1 {
-				dc := str[k]
-				if dc < '0' || dc > '9' {break}
-				decimal = decimal * 10 + int(dc - '0')
-				divisor *= 10
-				found_digit = true
-			}
-			break
-		} else if c >= '0' && c <= '9' {
-			whole = whole * 10 + int(c - '0')
-			found_digit = true
-		} else {
-			break
-		}
-	}
-
-	if !found_digit {return 0, false}
-
-	result := f32(whole) + f32(decimal) / divisor
-	if negative {result = -result}
-	return result, true
-}
-
-// CsvField stores the start/end byte indices of a single CSV field.
-CsvField :: struct {
-	start: int,
-	end:   int,
-}
-
-// split_csv_fields splits a line by commas and writes field boundaries
-// into the provided slice. Returns the number of fields found.
-split_csv_fields :: proc(line: []byte, fields: []CsvField) -> int {
-	count := 0
-	f_start := 0
-	for i in 0 ..< len(line) {
-		if line[i] == ',' {
-			if count < len(fields) {
-				fields[count] = {f_start, i}
-				count += 1
-			}
-			f_start = i + 1
-		}
-	}
-	if count < len(fields) {
-		fields[count] = {f_start, len(line)}
-		count += 1
-	}
-	return count
-}
-
-// load_map_csv reads the tile grid CSV and populates the MapGrid.
-// Returns true on success.
-load_map_csv :: proc(path: string, grid: ^MapGrid) -> bool {
-	content := read_file(path)
-	if len(content) == 0 {return false}
-	defer delete(content)
-
-	row := 0
-	col := 0
-	for b in content {
-		if b == '\n' {
-			for c := col; c < MAP_WIDTH; c += 1 {
-				grid.cells[row][c] = '.'
-			}
-			row += 1
-			col = 0
-			if row >= MAP_HEIGHT {break}
-		} else if b == '\r' {
-			// skip carriage return
-		} else if b == ',' {
-			col += 1
-		} else {
-			if row < MAP_HEIGHT && col < MAP_WIDTH {
-				grid.cells[row][col] = b
-			}
-		}
-	}
-
-	// Pad final row if file doesn't end with newline
-	if col > 0 && row < MAP_HEIGHT {
-		for c := col; c < MAP_WIDTH; c += 1 {
-			grid.cells[row][c] = '.'
-		}
-		row += 1
-	}
-
-	grid.width = MAP_WIDTH
-	grid.height = row
-	return true
-}
-
-// IslandMeta stores one row from metadata.csv — static island configuration.
-IslandMeta :: struct {
-	id:         int,
-	name:       [32]u8,
-	name_len:   int,
-	production: ResourceType,
-	rate:       f32,
-	max_ware:   f32,
-	dock_level: int,
-	tile_count: int,
-}
-
-// load_metadata_csv reads island metadata (names, production rates, etc.)
-// and writes results into the metas array.
-load_metadata_csv :: proc(path: string, metas: ^[MAX_ISLANDS]IslandMeta, out_count: ^int) {
-	content := read_file(path)
-	if len(content) == 0 {return}
-	defer delete(content)
-
-	row := 0
-	line_start := 0
-	is_header := true
-
-	for i := 0; i <= len(content); i += 1 {
-		is_end := i == len(content)
-		is_newline := false
-		if !is_end {
-			is_newline = content[i] == '\n' || content[i] == '\r'
-		}
-
-		if is_end || is_newline {
-			if i > line_start && !is_header && row < MAX_ISLANDS {
-				line := content[line_start:i]
-
-				// Skip empty lines
-				all_whitespace := true
-				for b in line {
-					if b != ' ' && b != '\t' {
-						all_whitespace = false
-						break
-					}
-				}
-
-				if !all_whitespace {
-					fields: [16]CsvField
-					field_count := split_csv_fields(line, fields[:])
-
-					if field_count >= 8 {
-						meta := &metas[row]
-
-						// Column 0: island_id
-						if v, ok := parse_int(line[fields[0].start:fields[0].end]); ok {
-							meta.id = v
-						}
-
-						// Column 1: name (trim surrounding quotes)
-						ns := fields[1].start
-						ne := fields[1].end
-						if ne > ns && line[ns] == '"' {
-							ns += 1
-							if ne > ns && line[ne - 1] == '"' {
-								ne -= 1
-							}
-						}
-						n := min(ne - ns, 31)
-						for j in 0 ..< n {
-							meta.name[j] = line[ns + j]
-						}
-						meta.name_len = n
-
-						// Column 2: production character
-						if fields[2].end > fields[2].start {
-							meta.production = resource_from_char(line[fields[2].start])
-						}
-
-						// Column 3: rate
-						if v, ok := parse_f32(line[fields[3].start:fields[3].end]); ok {
-							meta.rate = v
-						}
-
-						// Column 5: max_warehouse
-						if v, ok := parse_f32(line[fields[5].start:fields[5].end]); ok {
-							meta.max_ware = v
-						}
-
-						// Column 6: dock_level
-						if v, ok := parse_int(line[fields[6].start:fields[6].end]); ok {
-							meta.dock_level = v
-						}
-
-						// Column 7: tile_count
-						if v, ok := parse_int(line[fields[7].start:fields[7].end]); ok {
-							meta.tile_count = v
-						}
-
-						row += 1
-					}
-				}
-			}
-
-			if is_header {is_header = false}
-
-			// Handle \r\n line endings
-			if !is_end && content[i] == '\r' && i + 1 < len(content) && content[i + 1] == '\n' {
-				line_start = i + 2
-			} else {
-				line_start = i + 1
-			}
-		}
-	}
-
-	out_count^ = row
-}
-
-// ---------------------------------------------------------------------------
-// Port loading — reads port positions from CSV and marks tiles
-// ---------------------------------------------------------------------------
-
-// load_ports_csv reads port positions (island_id, x, y) and marks
-// matching tiles as is_port on the corresponding island.
-load_ports_csv :: proc(path: string, islands: ^[MAX_ISLANDS]Island, island_count: int) {
-	content := read_file(path)
-	if len(content) == 0 {return}
-	defer delete(content)
-
-	row := 0
-	line_start := 0
-	is_header := true
-
-	for i := 0; i <= len(content); i += 1 {
-		is_end := i == len(content)
-		is_newline := false
-		if !is_end {
-			is_newline = content[i] == '\n' || content[i] == '\r'
-		}
-
-		if is_end || is_newline {
-			if i > line_start && !is_header {
-				line := content[line_start:i]
-
-				all_whitespace := true
-				for b in line {
-					if b != ' ' && b != '\t' {
-						all_whitespace = false
-						break
-					}
-				}
-
-				if !all_whitespace {
-					fields: [16]CsvField
-					field_count := split_csv_fields(line, fields[:])
-
-					if field_count >= 3 {
-						island_id := 0
-						px := 0
-						py := 0
-
-						if v, ok := parse_int(line[fields[0].start:fields[0].end]); ok {
-							island_id = v
-						}
-						if v, ok := parse_int(line[fields[1].start:fields[1].end]); ok {
-							px = v
-						}
-						if v, ok := parse_int(line[fields[2].start:fields[2].end]); ok {
-							py = v
-						}
-
-						// Mark the tile as port if island is in range
-						if island_id >= 0 && island_id < island_count {
-							island := &islands[island_id]
-							for t in 0 ..< island.tile_count {
-								if island.tiles[t].gx == i32(px) && island.tiles[t].gy == i32(py) {
-									island.tiles[t].is_port = true
-									island.port_count += 1
-									break
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if is_header {is_header = false}
-
-			if !is_end && content[i] == '\r' && i + 1 < len(content) && content[i + 1] == '\n' {
-				line_start = i + 2
-			} else {
-				line_start = i + 1
-			}
-		}
-	}
-}
-
-// load_islands_csv reads island tile assignments (island_id, x, y)
-// and populates the Island structs directly — no flood fill needed.
-// Returns the number of islands loaded.
-load_islands_csv :: proc(path: string, grid: ^MapGrid, islands: ^[MAX_ISLANDS]Island) -> int {
-	content := read_file(path)
-	if len(content) == 0 {return 0}
-	defer delete(content)
-
-	island_count := 0
-	row := 0
-	line_start := 0
-	is_header := true
-
-	for i := 0; i <= len(content); i += 1 {
-		is_end := i == len(content)
-		is_newline := false
-		if !is_end {
-			is_newline = content[i] == '\n' || content[i] == '\r'
-		}
-
-		if is_end || is_newline {
-			if i > line_start && !is_header {
-				line := content[line_start:i]
-
-				all_whitespace := true
-				for b in line {
-					if b != ' ' && b != '\t' {
-						all_whitespace = false
-						break
-					}
-				}
-
-				if !all_whitespace {
-					fields: [16]CsvField
-					field_count := split_csv_fields(line, fields[:])
-
-					if field_count >= 3 {
-						island_id := 0
-						px := 0
-						py := 0
-
-						if v, ok := parse_int(line[fields[0].start:fields[0].end]); ok {
-							island_id = v
-						}
-						if v, ok := parse_int(line[fields[1].start:fields[1].end]); ok {
-							px = v
-						}
-						if v, ok := parse_int(line[fields[2].start:fields[2].end]); ok {
-							py = v
-						}
-
-						if island_id >= 0 && island_id < MAX_ISLANDS {
-							island := &islands[island_id]
-
-							// Initialize island on first tile
-							if island.tile_count == 0 {
-								island.id = island_id
-								island.production = resource_from_char(grid.cells[py][px])
-								island.warehouse = 0
-								island.port_count = 0
-								if island_id > island_count {
-									island_count = island_id
-								}
-							}
-
-							if island.tile_count < MAX_TILES {
-								island.tiles[island.tile_count] = {i32(px), i32(py), false}
-								island.tile_count += 1
-							}
-						}
-					}
-				}
-			}
-
-			if is_header {is_header = false}
-
-			if !is_end && content[i] == '\r' && i + 1 < len(content) && content[i + 1] == '\n' {
-				line_start = i + 2
-			} else {
-				line_start = i + 1
-			}
-		}
-	}
-
-	// Compute center, radius, and count for each island
-	for i in 0 ..< island_count + 1 {
-		island := &islands[i]
-		if island.tile_count == 0 {continue}
-
-		min_x := island.tiles[0].gx
-		max_x := island.tiles[0].gx
-		min_y := island.tiles[0].gy
-		max_y := island.tiles[0].gy
-
-		for t in 1 ..< island.tile_count {
-			tx := island.tiles[t].gx
-			ty := island.tiles[t].gy
-			if tx < min_x {min_x = tx}
-			if tx > max_x {max_x = tx}
-			if ty < min_y {min_y = ty}
-			if ty > max_y {max_y = ty}
-		}
-
-		center_x := f32(min_x + max_x) / 2.0 * f32(TILE_SIZE)
-		center_y := f32(min_y + max_y) / 2.0 * f32(TILE_SIZE)
-		island.pos = {center_x, center_y}
-
-		half_w := f32(max_x - min_x) / 2.0 * f32(TILE_SIZE)
-		half_h := f32(max_y - min_y) / 2.0 * f32(TILE_SIZE)
-		island.radius = math.max(half_w, half_h)
-	}
-
-	return island_count + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -638,8 +172,8 @@ flood_fill_islands :: proc(
 			min_y, max_y := y, y
 
 			for head < tail && island.tile_count < MAX_TILES {
-				cx := queue[head][0]
-				cy := queue[head][1]
+				cx := queue[head][0] // current BFS cell x
+				cy := queue[head][1] // current BFS cell y
 				head += 1
 
 				island.tiles[island.tile_count] = {i32(cx), i32(cy), false}
@@ -650,9 +184,9 @@ flood_fill_islands :: proc(
 				if cy < min_y {min_y = cy}
 				if cy > max_y {max_y = cy}
 
-				for d in dirs {
-					nx := cx + d[0]
-					ny := cy + d[1]
+				for d in dirs { 	// d = direction offset {dx, dy}
+					nx := cx + d[0] // neighbor x
+					ny := cy + d[1] // neighbor y
 					if nx < 0 || nx >= grid.width || ny < 0 || ny >= grid.height {
 						continue
 					}
@@ -810,35 +344,49 @@ ship_stats := map[ShipTypes]ShipStats {
 // e.g. small cargo assisted by small assist: assist takes 60% damage, cargo 40%.
 // bigger assist ships guarantee better ratios.
 
+// ShipState tracks whether a ship is idle, sailing, or docked.
+ShipState :: enum {
+	IDLE,
+	SAILING,
+	DOCKED,
+}
+
 // Ship is a moveable vessel that can only travel in water.
 Ship :: struct {
 	x:      f32,
 	y:      f32,
 	speed:  f32,
-	angle:  f32, // TODO : remove this
+	angle:  f32,
 	type:   ShipTypes,
 	health: f32,
 	value:  f32,
+	state:  ShipState,
+	dest_x: f32, // destination world-x (used when SAILING)
+	dest_y: f32, // destination world-y (used when SAILING)
 }
 
 MAX_SHIPS :: 64
 
 // App is the top-level game state — islands, grid, camera, economy, and player.
 App :: struct {
-	islands:       [MAX_ISLANDS]Island,
-	island_count:  int,
-	grid:          MapGrid,
-	camera:        rl.Camera2D,
-	selected:      int,
-	money:         f32,
-	time_day:      f32,
-	scroll_tex:    rl.Texture2D,
-	bg_color:      rl.Color,
-	scroll_x:      f32,
-	scroll_y:      f32,
-	player:        Player,
-	ships:         [MAX_SHIPS]Ship,
-	world_economy: f32, // used to calculate total trading in game , we already have user money so percentage can be calculated via it.
+	islands:         [MAX_ISLANDS]Island,
+	island_count:    int,
+	grid:            MapGrid,
+	camera:          rl.Camera2D,
+	selected:        int,
+	money:           f32,
+	time_day:        f32,
+	scroll_tex:      rl.Texture2D,
+	bg_color:        rl.Color,
+	scroll_x:        f32,
+	scroll_y:        f32,
+	player:          Player,
+	ships:           [MAX_SHIPS]Ship,
+	world_economy:   f32, // used to calculate total trading in game , we already have user money so percentage can be calculated via it.
+	ship_pos_timer:  f32, // counts up to 5s then resets, gates position display refresh
+	sailing_count:   int, // cached count of SAILING ships
+	sailing_grid_xs: [MAX_SHIPS]int, // cached grid-x of each sailing ship
+	sailing_grid_ys: [MAX_SHIPS]int, // cached grid-y of each sailing ship
 }
 
 // ---------------------------------------------------------------------------
@@ -920,32 +468,38 @@ main :: proc() {
 		app.player.x = f32(t.gx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
 		app.player.y = f32(t.gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
 
-		// Place ship on water adjacent to a port tile
-		app.ships[0].x = app.player.x
-		app.ships[0].y = app.player.y
-		app.ships[0].type = .EXPLORER_SHIP
-		app.ships[0].health = ship_stats[.EXPLORER_SHIP].health
-		app.ships[0].value = ship_stats[.EXPLORER_SHIP].value
-		app.ships[0].speed = ship_stats[.EXPLORER_SHIP].speed
+		// Init explorer ship with base stats from lookup table
+		ship := &app.ships[0]
+		ship.type = .EXPLORER_SHIP
+		ship.health = ship_stats[.EXPLORER_SHIP].health
+		ship.value = ship_stats[.EXPLORER_SHIP].value
+		ship.speed = ship_stats[.EXPLORER_SHIP].speed * 15 // TODO : remove 50 from here , only for testing
+
+		// Spawn ship at bottom-right edge of map (open water)
+		ship.x = f32(MAP_WIDTH - 2) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+		ship.y = f32(MAP_HEIGHT - 2) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+
+		// Find a water tile adjacent to the spawn island's port as destination
 		dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 		for ti in 0 ..< app.islands[spawn_island].tile_count {
 			if !app.islands[spawn_island].tiles[ti].is_port {continue}
-			px := app.islands[spawn_island].tiles[ti].gx
-			py := app.islands[spawn_island].tiles[ti].gy
+			port_gx := app.islands[spawn_island].tiles[ti].gx
+			port_gy := app.islands[spawn_island].tiles[ti].gy
 			for d in dirs {
-				wx := px + i32(d[0])
-				wy := py + i32(d[1])
-				if wx >= 0 &&
-				   wx < i32(app.grid.width) &&
-				   wy >= 0 &&
-				   wy < i32(app.grid.height) &&
-				   app.grid.cells[wy][wx] == '.' {
-					app.ships[0].x = f32(wx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-					app.ships[0].y = f32(wy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+				water_gx := port_gx + i32(d[0]) // adjacent water tile x
+				water_gy := port_gy + i32(d[1]) // adjacent water tile y
+				if water_gx >= 0 &&
+				   water_gx < i32(app.grid.width) &&
+				   water_gy >= 0 &&
+				   water_gy < i32(app.grid.height) &&
+				   app.grid.cells[water_gy][water_gx] == '.' {
+					ship.dest_x = f32(water_gx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					ship.dest_y = f32(water_gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					ship.state = .SAILING
 					break
 				}
 			}
-			if is_water(&app.grid, app.ships[0].x, app.ships[0].y) {break}
+			if ship.state == .SAILING {break}
 		}
 	}
 
@@ -969,6 +523,18 @@ main :: proc() {
 		update_ship(app)
 		update_camera(app)
 		app.time_day += rl.GetFrameTime() / 60.0
+		app.ship_pos_timer += rl.GetFrameTime()
+		if app.ship_pos_timer >= 5.0 {
+			app.ship_pos_timer = 0
+			app.sailing_count = 0
+			for i in 0 ..< MAX_SHIPS {
+				if app.ships[i].state == .SAILING {
+					app.sailing_grid_xs[app.sailing_count] = int(app.ships[i].x / f32(TILE_SIZE))
+					app.sailing_grid_ys[app.sailing_count] = int(app.ships[i].y / f32(TILE_SIZE))
+					app.sailing_count += 1
+				}
+			}
+		}
 
 		rl.BeginDrawing()
 		rl.ClearBackground(app.bg_color)
@@ -999,8 +565,8 @@ main :: proc() {
 // is_water returns true if the world-space position falls on a water tile
 // (or outside the grid bounds).
 is_water :: proc(grid: ^MapGrid, world_x, world_y: f32) -> bool {
-	gx := int(world_x / f32(TILE_SIZE))
-	gy := int(world_y / f32(TILE_SIZE))
+	gx := int(world_x / f32(TILE_SIZE)) // grid-x from world position
+	gy := int(world_y / f32(TILE_SIZE)) // grid-y from world position
 	if gx < 0 || gx >= grid.width || gy < 0 || gy >= grid.height {
 		return true
 	}
@@ -1032,9 +598,36 @@ update_player :: proc(app: ^App) {
 	}
 }
 
-// update_ship is currently unused — ship is static at port.
+// update_ship moves ships toward their destination when sailing.
 update_ship :: proc(app: ^App) {
-	_ = app
+	dt := rl.GetFrameTime()
+	for i in 0 ..< MAX_SHIPS {
+		ship := &app.ships[i]
+		if ship.state != .SAILING {continue}
+
+		dx := ship.dest_x - ship.x
+		dy := ship.dest_y - ship.y
+		dist := math.sqrt(dx * dx + dy * dy)
+
+		// Arrived — snap to destination and dock
+		if dist < 2.0 {
+			ship.x = ship.dest_x
+			ship.y = ship.dest_y
+			ship.state = .DOCKED
+			continue
+		}
+
+		// Normalize direction and move at ship's speed
+		nx := dx / dist
+		ny := dy / dist
+		step := ship.speed * dt
+		if step > dist {step = dist}
+		ship.x += nx * step
+		ship.y += ny * step
+
+		// Rotate to face movement direction (degrees, 0 = right)
+		ship.angle = math.atan2(ny, nx) * (180.0 / math.PI)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +808,20 @@ draw_hud :: proc(app: ^App) {
 	}
 	imgui.End()
 
+	// Sailing ships panel — shows count and positions, refreshes every 5s
+	imgui.SetNextWindowSize({260, 0}, .FirstUseEver)
+	imgui.SetNextWindowPos({10, 200}, .FirstUseEver)
+	if imgui.Begin("Sailing Ships") {
+		imgui.Text("En route: %d", app.sailing_count)
+		if app.sailing_count > 0 {
+			imgui.Separator()
+			for i in 0 ..< app.sailing_count {
+				imgui.Text("#%d  grid(%d, %d)", i, app.sailing_grid_xs[i], app.sailing_grid_ys[i])
+			}
+		}
+	}
+	imgui.End()
+
 	// Selected-island detail panel
 	if app.selected >= 0 && app.selected < app.island_count {
 		island := &app.islands[app.selected]
@@ -1282,8 +889,8 @@ handle_click :: proc(app: ^App) {
 		island := &app.islands[i]
 		for t in 0 ..< island.tile_count {
 			tile := &island.tiles[t]
-			tx := f32(tile.gx) * tile_f
-			ty := f32(tile.gy) * tile_f
+			tx := f32(tile.gx) * tile_f // tile world-x position
+			ty := f32(tile.gy) * tile_f // tile world-y position
 			if mouse.x >= tx && mouse.x <= tx + tile_f && mouse.y >= ty && mouse.y <= ty + tile_f {
 				app.selected = i
 				return
