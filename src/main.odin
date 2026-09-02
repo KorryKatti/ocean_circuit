@@ -462,6 +462,15 @@ main :: proc() {
 		spawn_island = 0
 	}
 
+	if spawn_island >= 0 {
+		spawn_name := "spawn"
+		n := min(len(spawn_name), 31)
+		for j in 0 ..< n {
+			app.islands[spawn_island].name[j] = spawn_name[j]
+		}
+		app.islands[spawn_island].name_len = n
+	}
+
 	if spawn_island >= 0 && app.islands[spawn_island].tile_count > 0 {
 		// Place player on first tile
 		t := app.islands[spawn_island].tiles[0]
@@ -475,31 +484,27 @@ main :: proc() {
 		ship.value = ship_stats[.EXPLORER_SHIP].value
 		ship.speed = ship_stats[.EXPLORER_SHIP].speed * 15 // TODO : remove 50 from here , only for testing
 
-		// Spawn ship at bottom-right edge of map (open water)
-		ship.x = f32(MAP_WIDTH - 2) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-		ship.y = f32(MAP_HEIGHT - 2) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-
-		// Find a water tile adjacent to the spawn island's port as destination
+		// Find a water tile adjacent to the spawn island's port
 		dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 		for ti in 0 ..< app.islands[spawn_island].tile_count {
 			if !app.islands[spawn_island].tiles[ti].is_port {continue}
 			port_gx := app.islands[spawn_island].tiles[ti].gx
 			port_gy := app.islands[spawn_island].tiles[ti].gy
 			for d in dirs {
-				water_gx := port_gx + i32(d[0]) // adjacent water tile x
-				water_gy := port_gy + i32(d[1]) // adjacent water tile y
+				water_gx := port_gx + i32(d[0])
+				water_gy := port_gy + i32(d[1])
 				if water_gx >= 0 &&
 				   water_gx < i32(app.grid.width) &&
 				   water_gy >= 0 &&
 				   water_gy < i32(app.grid.height) &&
 				   app.grid.cells[water_gy][water_gx] == '.' {
-					ship.dest_x = f32(water_gx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-					ship.dest_y = f32(water_gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
-					ship.state = .SAILING
+					ship.x = f32(water_gx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					ship.y = f32(water_gy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+					ship.state = .DOCKED
 					break
 				}
 			}
-			if ship.state == .SAILING {break}
+			if ship.state == .DOCKED {break}
 		}
 	}
 
@@ -510,7 +515,7 @@ main :: proc() {
 	app.camera.zoom = 0.5
 
 	// Tiled sea texture
-	app.scroll_tex = rl.LoadTexture("assets/img/sea_texture.jpg")
+	app.scroll_tex = rl.LoadTexture("assets/img/sea_texture.png")
 	defer rl.UnloadTexture(app.scroll_tex)
 
 	app.bg_color = {10, 20, 50, 255}
