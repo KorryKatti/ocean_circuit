@@ -16,6 +16,13 @@ TILE_SIZE :: 32
 MAP_WIDTH :: 4000
 MAP_HEIGHT :: 3250
 MAX_PORTS :: 4096
+MAX_LOG   :: 32
+
+LogEntry :: struct {
+	msg:  [128]u8,
+	len:  int,
+	time: f32,
+}
 
 // ---------------------------------------------------------------------------
 // Resource types
@@ -120,6 +127,20 @@ get_name :: proc(island: Island) -> cstring {
 	return cstring(&buf[0])
 }
 
+push_log :: proc(app: ^App, msg: string, day: f32) {
+	entry := &app.log_entries[app.log_next]
+	n := min(len(msg), 127)
+	for j in 0 ..< n {
+		entry.msg[j] = msg[j]
+	}
+	entry.len = n
+	entry.time = day
+	app.log_next = (app.log_next + 1) % MAX_LOG
+	if app.log_count < MAX_LOG {
+		app.log_count += 1
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -164,15 +185,12 @@ draw_islands :: proc(app: ^App) {
 			tile_color := color
 			if tile.is_port {
 				tile_color = PORT_COLOR
-				// Check if this port is discovered
-				for pi in 0 ..< app.all_port_count {
-					if app.all_ports[pi].island_idx == i &&
-					   app.all_ports[pi].tile_idx == t &&
-					   app.discovered_ports[pi] {
-						tile_color = {255, 215, 0, 255} // gold
-						break
-					}
-				}
+			}
+			if app.discovered_islands[i] {
+				// Brighten discovered islands
+				tile_color.r = min(tile_color.r + 40, 255)
+				tile_color.g = min(tile_color.g + 40, 255)
+				tile_color.b = min(tile_color.b + 40, 255)
 			}
 
 			rl.DrawRectangleV({x, y}, {tile_f, tile_f}, tile_color)

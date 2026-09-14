@@ -96,21 +96,20 @@ draw_hud :: proc(app: ^App) {
 						imgui.TextDisabled("-> %s (%s)", get_name(island^), resource_names[island.production])
 					}
 				}
-				imgui.Text("Discovered: %d / %d", app.discovered_count, app.all_port_count)
+				imgui.Text("Islands: %d / %d", app.discovered_island_count, app.island_count)
 			} else {
 				imgui.Text("Status: Idle")
-				imgui.Text("Discovered: %d / %d", app.discovered_count, app.all_port_count)
+				imgui.Text("Islands: %d / %d", app.discovered_island_count, app.island_count)
 			}
 
 			imgui.Separator()
 
 			if ship.waypoint_count == 0 {
-				k: i32
-				max_ports := i32(app.all_port_count - app.discovered_count)
-				imgui.Text("Ports to visit (0 = all):")
-				imgui.SliderInt("##k", &k, 0, max_ports)
+				undiscovered := i32(app.island_count - app.discovered_island_count)
+				imgui.Text("Islands to visit (0 = all):")
+				imgui.SliderInt("##k", &app.explore_k, 0, undiscovered)
 				if imgui.Button("Send to Explore", {200, 30}) {
-					build_explore_route(app, ship, int(k))
+					build_explore_route(app, ship, int(app.explore_k))
 				}
 			} else {
 				if imgui.Button("Stop", {90, 30}) {
@@ -136,17 +135,35 @@ draw_hud :: proc(app: ^App) {
 		// Discovered ports panel
 	imgui.SetNextWindowSize({260, 0}, .FirstUseEver)
 	imgui.SetNextWindowPos({310, 10}, .FirstUseEver)
-	if imgui.Begin("Discovered Ports") {
-		imgui.Text("%d / %d found", app.discovered_count, app.all_port_count)
+	if imgui.Begin("Discovered Islands") {
+		imgui.Text("%d / %d found", app.discovered_island_count, app.island_count)
 		imgui.Separator()
-		for i in 0 ..< app.all_port_count {
-			if !app.discovered_ports[i] {continue}
-			port := &app.all_ports[i]
-			if port.island_idx < 0 || port.island_idx >= app.island_count {continue}
-			island := &app.islands[port.island_idx]
+		for i in 0 ..< app.island_count {
+			if !app.discovered_islands[i] {continue}
+			island := &app.islands[i]
 			name := get_name(island^)
 			imgui.TextColored({0, 0.9, 0.8, 1}, "%s", name)
 			imgui.TextDisabled("  %s — rate %.1f", resource_names[island.production], island.rate)
+		}
+	}
+	imgui.End()
+
+	// Discovery log panel
+	imgui.SetNextWindowSize({260, 150}, .FirstUseEver)
+	imgui.SetNextWindowPos({310, 400}, .FirstUseEver)
+	if imgui.Begin("Discovery Log") {
+		if app.log_count == 0 {
+			imgui.TextDisabled("No discoveries yet...")
+		} else {
+			show := min(app.log_count, 10)
+			idx := app.log_next
+			for _ in 0 ..< show {
+				idx = (idx - 1 + MAX_LOG) % MAX_LOG
+				entry := &app.log_entries[idx]
+				entry_msg := string(entry.msg[:entry.len])
+				imgui.TextColored({1, 0.85, 0.2, 1}, "Day %.1f", entry.time)
+				imgui.TextDisabled("  %s", entry_msg)
+			}
 		}
 	}
 	imgui.End()

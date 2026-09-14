@@ -49,6 +49,12 @@ App :: struct {
 	all_port_count:   int,
 	discovered_ports: [MAX_PORTS]bool, // parallel to all_ports
 	discovered_count: int,
+	discovered_islands:    [MAX_ISLANDS]bool,
+	discovered_island_count: int,
+	explore_k:             i32,
+	log_entries:      [MAX_LOG]LogEntry,
+	log_count:        int,
+	log_next:         int,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +144,10 @@ main :: proc() {
 	}
 
 	// spawn point is already discovered
+	if spawn_island >= 0 {
+		app.discovered_islands[spawn_island] = true
+		app.discovered_island_count += 1
+	}
 	for i in 0..<app.all_port_count {
 		if app.all_ports[i].island_idx == spawn_island {
 			app.discovered_ports[i] = true

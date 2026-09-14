@@ -3,6 +3,7 @@ package main
 
 // ships — Ship types, stats, movement, and rendering.
 
+import "core:fmt"
 import "core:math"
 import rl "vendor:raylib"
 
@@ -279,14 +280,24 @@ update_ship :: proc(app: ^App) {
 			ship.x = ship.dest_x
 			ship.y = ship.dest_y
 
-			if ship.waypoint_idx < ship.waypoint_count {
-				wp := &ship.waypoints[ship.waypoint_idx]
-				if wp.all_port_idx >= 0 && wp.all_port_idx < app.all_port_count {
-					if !app.discovered_ports[wp.all_port_idx] {
-						app.discovered_ports[wp.all_port_idx] = true
-						app.discovered_count += 1
+		if ship.waypoint_idx < ship.waypoint_count {
+			wp := &ship.waypoints[ship.waypoint_idx]
+			if wp.all_port_idx >= 0 && wp.all_port_idx < app.all_port_count {
+				if !app.discovered_ports[wp.all_port_idx] {
+					app.discovered_ports[wp.all_port_idx] = true
+					app.discovered_count += 1
+					if wp.island_idx >= 0 && wp.island_idx < app.island_count {
+						if !app.discovered_islands[wp.island_idx] {
+							app.discovered_islands[wp.island_idx] = true
+							app.discovered_island_count += 1
+						}
+						island := &app.islands[wp.island_idx]
+						msg := fmt.aprintf("Arrived at %s (%s)", get_name(island^), resource_names[island.production])
+						push_log(app, msg, app.time_day)
+						delete(msg, context.allocator)
 					}
 				}
+			}
 				ship.waypoint_idx += 1
 			}
 
@@ -530,6 +541,16 @@ check_sensor_discovery :: proc(app: ^App, ship: ^Ship) {
 		if dx * dx + dy * dy <= sq_range {
 			app.discovered_ports[i] = true
 			app.discovered_count += 1
+			if port.island_idx >= 0 && port.island_idx < app.island_count {
+				if !app.discovered_islands[port.island_idx] {
+					app.discovered_islands[port.island_idx] = true
+					app.discovered_island_count += 1
+				}
+				island := &app.islands[port.island_idx]
+				msg := fmt.aprintf("Discovered %s (%s)", get_name(island^), resource_names[island.production])
+				push_log(app, msg, app.time_day)
+				delete(msg, context.allocator)
+			}
 		}
 	}
 }
