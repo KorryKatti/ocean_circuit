@@ -83,22 +83,182 @@ ShipState :: enum {
 
 MAX_SHIPS :: 64
 
-Ship :: struct {
-	x:      f32,
-	y:      f32,
-	speed:  f32,
-	angle:  f32,
-	type:   ShipTypes,
-	health: f32,
-	value:  f32,
-	state:  ShipState,
-	dest_x: f32,
-	dest_y: f32,
+Waypoint::struct {
+	x:f32,
+	y:f32,
+	all_port_idx:int,
+	island_idx:int,
 }
 
+Ship :: struct {
+	x, y:            f32,
+	speed:           f32,
+	angle:           f32,
+	type:            ShipTypes,
+	health, value:   f32,
+	state:           ShipState,
+	dest_x, dest_y:  f32,
+	waypoints:       [MAX_PORTS]Waypoint,
+	waypoint_count:  int,
+	waypoint_idx:    int,
+	dock_wait:       f32,
+}
+
+// used to reset a ship's waypoints when it docks or is destroyed
+reset_waypoints :: proc(ship: ^Ship) {
+	ship.waypoint_count = 0
+	ship.waypoint_idx = 0
+	ship.dock_wait=0
+}
 // ---------------------------------------------------------------------------
 // Update
 // ---------------------------------------------------------------------------
+
+
+// find_water_near finds the closest water tile to a world position.
+// Used to set waypoints on water next to ports instead of on the port itself.
+find_water_near :: proc(grid: ^MapGrid, wx, wy: f32) -> (rx, ry: f32) {
+	gx := int(wx / f32(TILE_SIZE))
+	gy := int(wy / f32(TILE_SIZE))
+
+	// Spiral outward from the port tile to find nearest water
+	for radius := 0; radius < 30; radius += 1 {
+		for dy := -radius; dy <= radius; dy += 1 {
+			for dx := -radius; dx <= radius; dx += 1 {
+				// Only check tiles on the edge of the current radius
+				if dx != -radius && dx != radius && dy != -radius && dy != radius {continue}
+				cx := gx + dx
+				cy := gy + dy
+				if cx < 0 || cx >= grid.width || cy < 0 || cy >= grid.height {continue}
+				if grid.cells[cy][cx] == '.' {
+					return f32(cx) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2,
+					       f32(cy) * f32(TILE_SIZE) + f32(TILE_SIZE) / 2
+				}
+			}
+		}
+	}
+	// Fallback: return original position
+	return wx, wy
+}
+
+build_explore_route :: proc(app: ^App, ship: ^Ship, k: int) {
+	reset_waypoints(ship)
+
+	// 1. Collect unique islands that have at least one undiscovered port.
+	//    For each such island, store the index of its nearest port to the ship.
+	candidate_island: [MAX_ISLANDS]int   // island index
+	candidate_port:   [MAX_ISLANDS]int   // best port index for that island
+	candidate_count := 0
+	island_seen: [MAX_ISLANDS]bool
+
+	for i in 0 ..< app.all_port_count {
+		if app.discovered_ports[i] {continue}
+		port := app.all_ports[i]
+		iid := port.island_idx
+		if iid < 0 || iid >= app.island_count {continue}
+		if island_seen[iid] {continue}
+		island_seen[iid] = true
+
+		candidate_island[candidate_count] = iid
+		candidate_port[candidate_count] = i
+		candidate_count += 1
+	}
+	if candidate_count == 0 {return}
+
+	// For each candidate island, find the single closest port to the ship
+	for c in 0 ..< candidate_count {
+		iid := candidate_island[c]
+		best_port_idx := candidate_port[c]
+		best_dx := app.all_ports[best_port_idx].x - ship.x
+		best_dy := app.all_ports[best_port_idx].y - ship.y
+		best_dist := best_dx * best_dx + best_dy * best_dy
+
+		for i in 0 ..< app.all_port_count {
+			if app.discovered_ports[i] {continue}
+			if app.all_ports[i].island_idx != iid {continue}
+			dx := app.all_ports[i].x - ship.x
+			dy := app.all_ports[i].y - ship.y
+			d := dx * dx + dy * dy
+			if d < best_dist {
+				best_dist = d
+				best_port_idx = i
+			}
+		}
+		candidate_port[c] = best_port_idx
+	}
+
+	// 2. If k > 0, sort candidates by distance and keep first k
+	if k > 0 && k < candidate_count {
+		for i in 1 ..< candidate_count {
+			key_pi := candidate_port[i]
+			kdx := app.all_ports[key_pi].x - ship.x
+			kdy := app.all_ports[key_pi].y - ship.y
+			key_dist := kdx * kdx + kdy * kdy
+			j := i - 1
+			for j >= 0 {
+				j_pi := candidate_port[j]
+				jdx := app.all_ports[j_pi].x - ship.x
+				jdy := app.all_ports[j_pi].y - ship.y
+				j_dist := jdx * jdx + jdy * jdy
+				if j_dist <= key_dist {break}
+				candidate_port[j + 1] = candidate_port[j]
+				candidate_island[j + 1] = candidate_island[j]
+				j -= 1
+			}
+			candidate_port[j + 1] = key_pi
+			candidate_island[j + 1] = candidate_island[i]
+		}
+		candidate_count = k
+	}
+
+	// 3. Nearest-neighbor ordering (greedy TSP)
+	used: [MAX_ISLANDS]bool
+	visited := 0
+	cx, cy := ship.x, ship.y
+
+	for visited < candidate_count {
+		best_c := -1
+		best_d: f32 = 1e30
+		for c in 0 ..< candidate_count {
+			if used[c] {continue}
+			port := app.all_ports[candidate_port[c]]
+			dx := port.x - cx
+			dy := port.y - cy
+			d := dx * dx + dy * dy
+			if d < best_d {
+				best_d = d
+				best_c = c
+			}
+		}
+		if best_c < 0 {break}
+
+		used[best_c] = true
+		port := app.all_ports[candidate_port[best_c]]
+
+		// Snap waypoint to water tile next to port, not the port itself
+		wp_x, wp_y := find_water_near(&app.grid, port.x, port.y)
+
+		wp := &ship.waypoints[ship.waypoint_count]
+		wp.x = wp_x
+		wp.y = wp_y
+		wp.all_port_idx = candidate_port[best_c]
+		wp.island_idx = candidate_island[best_c]
+		ship.waypoint_count += 1
+
+		cx = wp_x
+		cy = wp_y
+		visited += 1
+	}
+
+	if ship.waypoint_count > 0 {
+		ship.waypoint_idx = 0
+		ship.dest_x = ship.waypoints[0].x
+		ship.dest_y = ship.waypoints[0].y
+		ship.state = .SAILING
+	}
+}
+
+
 
 update_ship :: proc(app: ^App) {
 	dt := rl.GetFrameTime()
@@ -106,14 +266,38 @@ update_ship :: proc(app: ^App) {
 		ship := &app.ships[i]
 		if ship.state != .SAILING {continue}
 
+		if ship.dock_wait > 0 {
+			ship.dock_wait -= dt
+			continue
+		}
+
 		dx := ship.dest_x - ship.x
 		dy := ship.dest_y - ship.y
 		dist := math.sqrt(dx * dx + dy * dy)
 
-		if dist < 2.0 {
+		if dist < f32(TILE_SIZE) {
 			ship.x = ship.dest_x
 			ship.y = ship.dest_y
-			ship.state = .DOCKED
+
+			if ship.waypoint_idx < ship.waypoint_count {
+				wp := &ship.waypoints[ship.waypoint_idx]
+				if wp.all_port_idx >= 0 && wp.all_port_idx < app.all_port_count {
+					if !app.discovered_ports[wp.all_port_idx] {
+						app.discovered_ports[wp.all_port_idx] = true
+						app.discovered_count += 1
+					}
+				}
+				ship.waypoint_idx += 1
+			}
+
+			if ship.waypoint_idx < ship.waypoint_count {
+				ship.dest_x = ship.waypoints[ship.waypoint_idx].x
+				ship.dest_y = ship.waypoints[ship.waypoint_idx].y
+				ship.dock_wait = 1.5
+			} else {
+				reset_waypoints(ship)
+				ship.state = .IDLE
+			}
 			continue
 		}
 
@@ -123,8 +307,8 @@ update_ship :: proc(app: ^App) {
 		if step > dist {step = dist}
 		ship.x += nx * step
 		ship.y += ny * step
-
 		ship.angle = math.atan2(ny, nx) * (180.0 / math.PI)
+		check_sensor_discovery(app, ship)
 	}
 }
 
@@ -327,4 +511,25 @@ radar_from_player :: proc(
 	out_hits: []RadarHit,
 ) -> int {
 	return radar(app.player.x, app.player.y, -1, range_f32, k, app, out_hits)
+}
+
+// ---------------------------------------------------------------------------
+// Proximity-based discovery
+// ---------------------------------------------------------------------------
+
+check_sensor_discovery :: proc(app: ^App, ship: ^Ship) {
+	if ship.state != .SAILING {return}
+	sensor := ship_stats[ship.type].sensor_range
+	sq_range := sensor * sensor
+
+	for i in 0 ..< app.all_port_count {
+		if app.discovered_ports[i] {continue}
+		port := &app.all_ports[i]
+		dx := port.x - ship.x
+		dy := port.y - ship.y
+		if dx * dx + dy * dy <= sq_range {
+			app.discovered_ports[i] = true
+			app.discovered_count += 1
+		}
+	}
 }

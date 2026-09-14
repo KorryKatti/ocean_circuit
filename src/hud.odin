@@ -16,6 +16,16 @@ draw_hud :: proc(app: ^App) {
 		imgui.Text("Day: %.1f", app.time_day)
 		imgui.Text("Zoom: %.0f%%", app.camera.zoom * 100)
 		imgui.Separator()
+		if app.cam_mode == .PLAYER {
+			if imgui.Button("Camera: Player", {240, 25}) {
+				app.cam_mode = .SHIP
+			}
+		} else {
+			if imgui.Button("Camera: Ship", {240, 25}) {
+				app.cam_mode = .PLAYER
+			}
+		}
+		imgui.Separator()
 		imgui.TextDisabled("WASD: move character")
 		imgui.TextDisabled("Scroll: zoom")
 		imgui.TextDisabled("Click: select island or ship")
@@ -64,16 +74,80 @@ draw_hud :: proc(app: ^App) {
 
 	// Selected-ship detail panel
 	if app.selected == -2 {
-		imgui.SetNextWindowSize({280, 0}, .FirstUseEver)
+		ship := &app.ships[0]
+
+		imgui.SetNextWindowSize({300, 0}, .FirstUseEver)
 		imgui.SetNextWindowPos({10, 120}, .FirstUseEver)
 		if imgui.Begin("Ship") {
-			stats := ship_stats[app.ships[0].type]
-			imgui.TextColored({1, 0.4, 0.6, 1}, "%v", app.ships[0].type)
+			stats := ship_stats[ship.type]
+			imgui.TextColored({1, 0.4, 0.6, 1}, "%v", ship.type)
 			imgui.Separator()
-			imgui.Text("Health: %.0f / %.0f", app.ships[0].health, stats.health)
-			imgui.Text("Speed: %.0f", app.ships[0].speed)
+			imgui.Text("Health: %.0f / %.0f", ship.health, stats.health)
+			imgui.Text("Speed: %.0f", ship.speed)
 			imgui.Text("Value: $%d", i32(stats.value))
+			imgui.Separator()
+
+			if ship.waypoint_count > 0 {
+				imgui.Text("Exploring: %d / %d ports", ship.waypoint_idx + 1, ship.waypoint_count)
+				if ship.waypoint_idx < ship.waypoint_count {
+					wp := &ship.waypoints[ship.waypoint_idx]
+					if wp.island_idx >= 0 && wp.island_idx < app.island_count {
+						island := &app.islands[wp.island_idx]
+						imgui.TextDisabled("-> %s (%s)", get_name(island^), resource_names[island.production])
+					}
+				}
+				imgui.Text("Discovered: %d / %d", app.discovered_count, app.all_port_count)
+			} else {
+				imgui.Text("Status: Idle")
+				imgui.Text("Discovered: %d / %d", app.discovered_count, app.all_port_count)
+			}
+
+			imgui.Separator()
+
+			if ship.waypoint_count == 0 {
+				k: i32
+				max_ports := i32(app.all_port_count - app.discovered_count)
+				imgui.Text("Ports to visit (0 = all):")
+				imgui.SliderInt("##k", &k, 0, max_ports)
+				if imgui.Button("Send to Explore", {200, 30}) {
+					build_explore_route(app, ship, int(k))
+				}
+			} else {
+				if imgui.Button("Stop", {90, 30}) {
+					reset_waypoints(ship)
+					ship.state = .IDLE
+				}
+				imgui.SameLine()
+				if imgui.Button("Recall", {90, 30}) {
+					reset_waypoints(ship)
+					for i in 0 ..< app.all_port_count {
+						if app.all_ports[i].island_idx == 0 {
+							ship.dest_x = app.all_ports[i].x
+							ship.dest_y = app.all_ports[i].y
+							ship.state = .SAILING
+							break
+						}
+					}
+				}
+			}
 		}
 		imgui.End()
 	}
+		// Discovered ports panel
+	imgui.SetNextWindowSize({260, 0}, .FirstUseEver)
+	imgui.SetNextWindowPos({310, 10}, .FirstUseEver)
+	if imgui.Begin("Discovered Ports") {
+		imgui.Text("%d / %d found", app.discovered_count, app.all_port_count)
+		imgui.Separator()
+		for i in 0 ..< app.all_port_count {
+			if !app.discovered_ports[i] {continue}
+			port := &app.all_ports[i]
+			if port.island_idx < 0 || port.island_idx >= app.island_count {continue}
+			island := &app.islands[port.island_idx]
+			name := get_name(island^)
+			imgui.TextColored({0, 0.9, 0.8, 1}, "%s", name)
+			imgui.TextDisabled("  %s — rate %.1f", resource_names[island.production], island.rate)
+		}
+	}
+	imgui.End()
 }

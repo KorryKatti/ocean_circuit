@@ -15,6 +15,7 @@ MAX_TILES :: 16000
 TILE_SIZE :: 32
 MAP_WIDTH :: 4000
 MAP_HEIGHT :: 3250
+MAX_PORTS :: 4096
 
 // ---------------------------------------------------------------------------
 // Resource types
@@ -28,6 +29,12 @@ ResourceType :: enum {
 	OIL,
 	LUXURY,
 	PORT,
+}
+
+PortRef :: struct {
+	island_idx: int,
+	tile_idx:   int, // index into islands[island_idx].tiles
+	x, y:       f32, // world coords (pixels) for routing/rendering
 }
 
 resource_names := [?]cstring{"Wood", "Fish", "Ore", "Metal", "Oil", "Luxury", "Port"}
@@ -157,6 +164,15 @@ draw_islands :: proc(app: ^App) {
 			tile_color := color
 			if tile.is_port {
 				tile_color = PORT_COLOR
+				// Check if this port is discovered
+				for pi in 0 ..< app.all_port_count {
+					if app.all_ports[pi].island_idx == i &&
+					   app.all_ports[pi].tile_idx == t &&
+					   app.discovered_ports[pi] {
+						tile_color = {255, 215, 0, 255} // gold
+						break
+					}
+				}
 			}
 
 			rl.DrawRectangleV({x, y}, {tile_f, tile_f}, tile_color)

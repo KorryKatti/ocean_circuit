@@ -20,25 +20,35 @@ Player :: struct {
 	size:  f32,
 }
 
+CameraMode :: enum {
+	PLAYER,
+	SHIP,
+}
+
 App :: struct {
-	islands:         [MAX_ISLANDS]Island,
-	island_count:    int,
-	grid:            MapGrid,
-	camera:          rl.Camera2D,
-	selected:        int,
-	money:           f32,
-	time_day:        f32,
-	scroll_tex:      rl.Texture2D,
-	bg_color:        rl.Color,
-	scroll_x:        f32,
-	scroll_y:        f32,
-	player:          Player,
-	ships:           [MAX_SHIPS]Ship,
-	world_economy:   f32,
-	ship_pos_timer:  f32,
-	sailing_count:   int,
-	sailing_grid_xs: [MAX_SHIPS]int,
-	sailing_grid_ys: [MAX_SHIPS]int,
+	islands:          [MAX_ISLANDS]Island,
+	island_count:     int,
+	grid:             MapGrid,
+	camera:           rl.Camera2D,
+	cam_mode:         CameraMode,
+	selected:         int,
+	money:            f32,
+	time_day:         f32,
+	scroll_tex:       rl.Texture2D,
+	bg_color:         rl.Color,
+	scroll_x:         f32,
+	scroll_y:         f32,
+	player:           Player,
+	ships:            [MAX_SHIPS]Ship,
+	world_economy:    f32,
+	ship_pos_timer:   f32,
+	sailing_count:    int,
+	sailing_grid_xs:  [MAX_SHIPS]int,
+	sailing_grid_ys:  [MAX_SHIPS]int,
+	all_ports:        [MAX_PORTS]PortRef, // flat list built at load time
+	all_port_count:   int,
+	discovered_ports: [MAX_PORTS]bool, // parallel to all_ports
+	discovered_count: int,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,8 +105,23 @@ main :: proc() {
 	// Load port positions and mark tiles
 	load_ports_csv("assets/data/ports.csv", &app.islands, app.island_count)
 
-	app.money = 1000
-	app.selected = -1
+	// flat port index from island tiles
+	for i in 0..<app.island_count {
+		island := &app.islands[i]
+		for t in 0..<island.tile_count {
+			if !island.tiles[t].is_port {continue}
+			if app.all_port_count >= MAX_PORTS {
+				fmt.println("ERROR: Too many ports, increase MAX_PORTS")
+				break
+			}
+			port:=&app.all_ports[app.all_port_count]
+			port.island_idx=i
+			port.tile_idx=t
+			port.x = f32(island.tiles[t].gx)*f32(TILE_SIZE)+f32(TILE_SIZE)/2 // this is done to avoid recalculating it every frame. it calculates the world coordinates of the port tile center. why center ? because the ship will be drawn at the center of the tile, not the top-left corner.
+			port.y = f32(island.tiles[t].gy)*f32(TILE_SIZE)+f32(TILE_SIZE)/2
+			app.all_port_count+=1
+		}
+	}
 
 	// Spawn the player on the PORT island (fallback: first island)
 	app.player.size = 20
@@ -111,6 +136,18 @@ main :: proc() {
 	if spawn_island < 0 && app.island_count > 0 {
 		spawn_island = 0
 	}
+
+	// spawn point is already discovered
+	for i in 0..<app.all_port_count {
+		if app.all_ports[i].island_idx == spawn_island {
+			app.discovered_ports[i] = true
+			app.discovered_count += 1
+			break
+		}
+	}
+
+	app.money = 1000
+	app.selected = -1
 
 	if spawn_island >= 0 {
 		spawn_name := "spawn"
@@ -130,7 +167,7 @@ main :: proc() {
 		ship.type = .EXPLORER_SHIP
 		ship.health = ship_stats[.EXPLORER_SHIP].health
 		ship.value = ship_stats[.EXPLORER_SHIP].value
-		ship.speed = ship_stats[.EXPLORER_SHIP].speed * 15
+		ship.speed = ship_stats[.EXPLORER_SHIP].speed
 
 		dirs := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 		for ti in 0 ..< app.islands[spawn_island].tile_count {
@@ -215,7 +252,13 @@ main :: proc() {
 // ---------------------------------------------------------------------------
 
 update_camera :: proc(app: ^App) {
-	app.camera.target = {app.player.x, app.player.y}
+	switch app.cam_mode {
+	case .PLAYER:
+		app.camera.target = {app.player.x, app.player.y}
+	case .SHIP:
+		ship := &app.ships[0]
+		app.camera.target = {ship.x, ship.y}
+	}
 
 	wheel := rl.GetMouseWheelMove()
 	if wheel != 0 {
