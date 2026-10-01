@@ -157,6 +157,8 @@ build_explore_route :: proc(app: ^App, ship: ^Ship, k: int) {
 		port := app.all_ports[i]
 		iid := port.island_idx
 		if iid < 0 || iid >= app.island_count {continue}
+		if app.discovered_islands[iid] {continue}
+		if app.islands[iid].production == .PORT {continue}
 		if island_seen[iid] {continue}
 		island_seen[iid] = true
 
@@ -318,7 +320,7 @@ update_ship :: proc(app: ^App) {
 		if step > dist {step = dist}
 		ship.x += nx * step
 		ship.y += ny * step
-		ship.angle = math.atan2(ny, nx) * (180.0 / math.PI)
+		ship.angle = math.atan2(ny, nx) * (180.0 / math.PI) + 90
 		check_sensor_discovery(app, ship)
 	}
 }
@@ -328,15 +330,20 @@ update_ship :: proc(app: ^App) {
 // ---------------------------------------------------------------------------
 
 draw_ship :: proc(app: ^App) {
+	ship := &app.ships[0]
 	tile_f := f32(TILE_SIZE)
-	ship_w := tile_f
-	ship_h := tile_f * 3
+	ship_w := tile_f * 3
+	ship_h := tile_f * 8
 
+	// Source rect: full texture
+	src := rl.Rectangle{0, 0, f32(app.ship_tex.width), f32(app.ship_tex.height)}
+	// Dest rect: offset to center the actual ship pixels within the texture
+	ox := f32(8)   // nudge right
+	oy := f32(20)  // nudge down (texture has more padding above ship)
+	dest := rl.Rectangle{ship.x - ship_w / 2 + ox, ship.y - ship_h / 2 + oy, ship_w, ship_h}
 	origin := rl.Vector2{ship_w / 2, ship_h / 2}
-	rect := rl.Rectangle{app.ships[0].x - origin.x, app.ships[0].y - origin.y, ship_w, ship_h}
 
-	rl.DrawRectanglePro(rect, origin, app.ships[0].angle, {255, 100, 150, 255})
-	rl.DrawRectangleLinesEx(rect, 2, {200, 60, 100, 255})
+	rl.DrawTexturePro(app.ship_tex, src, dest, origin, ship.angle, rl.WHITE)
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +543,9 @@ check_sensor_discovery :: proc(app: ^App, ship: ^Ship) {
 	for i in 0 ..< app.all_port_count {
 		if app.discovered_ports[i] {continue}
 		port := &app.all_ports[i]
+		if port.island_idx >= 0 && port.island_idx < app.island_count {
+			if app.islands[port.island_idx].production == .PORT {continue}
+		}
 		dx := port.x - ship.x
 		dy := port.y - ship.y
 		if dx * dx + dy * dy <= sq_range {

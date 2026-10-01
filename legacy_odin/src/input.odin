@@ -53,8 +53,8 @@ handle_click :: proc(app: ^App) {
 	tile_f := f32(TILE_SIZE)
 
 	// Check ship hit
-	ship_w := tile_f
-	ship_h := tile_f * 3
+	ship_w := tile_f * 10
+	ship_h := tile_f * 26
 	if mouse.x >= app.ships[0].x - ship_w / 2 &&
 	   mouse.x <= app.ships[0].x + ship_w / 2 &&
 	   mouse.y >= app.ships[0].y - ship_h / 2 &&

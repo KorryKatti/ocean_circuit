@@ -1,3 +1,4 @@
+# Build output
 bin/
 build/
 *.exe
@@ -6,8 +7,6 @@ build/
 *.so
 *.dylib
 *.dll
-*.a
-*.lib
 
 # Odin build cache
 .cache/
@@ -27,5 +26,29 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# Generated data
+# ---------------------------------------------------------------------------
+# Generated world data. tools/generate_map.py writes these; they are ~28 MB and
+# regenerable. data/.gdignore must stay tracked - Godot reads it to skip
+# importing data/ as resources, and without it the CSVs get imported as
+# translation files and break at runtime.
+# ---------------------------------------------------------------------------
 assets/data/*.csv
+data/*.csv
+
+# Godot tries to import the generator's output dir as CSV translations. Its
+# artifacts point at CSVs that are not committed, so they break a fresh clone.
+assets/data/*.import
+assets/data/*.translation
+
+# ---------------------------------------------------------------------------
+# Godot
+# ---------------------------------------------------------------------------
+.godot/
+*.translation
+
+# .uid files next to scripts and scenes ARE tracked. They are how Godot 4.4+
+# resolves resource references, so losing them breaks scenes on other machines.
+
+# Godot export output
+export/
+android/

@@ -35,6 +35,7 @@ App :: struct {
 	money:            f32,
 	time_day:         f32,
 	scroll_tex:       rl.Texture2D,
+	ship_tex:         rl.Texture2D,
 	bg_color:         rl.Color,
 	scroll_x:         f32,
 	scroll_y:         f32,
@@ -152,7 +153,6 @@ main :: proc() {
 		if app.all_ports[i].island_idx == spawn_island {
 			app.discovered_ports[i] = true
 			app.discovered_count += 1
-			break
 		}
 	}
 
@@ -211,6 +211,10 @@ main :: proc() {
 	// Tiled sea texture
 	app.scroll_tex = rl.LoadTexture("assets/img/sea_texture.png")
 	defer rl.UnloadTexture(app.scroll_tex)
+
+	// Ship texture
+	app.ship_tex = rl.LoadTexture("assets/img/ship.png")
+	defer rl.UnloadTexture(app.ship_tex)
 
 	app.bg_color = {10, 20, 50, 255}
 
@@ -271,7 +275,7 @@ update_camera :: proc(app: ^App) {
 	}
 
 	wheel := rl.GetMouseWheelMove()
-	if wheel != 0 {
+	if wheel != 0 && !imgui.GetIO().WantCaptureMouse {
 		app.camera.zoom += wheel * 0.05
 		if app.camera.zoom < 0.5 {app.camera.zoom = 0.5}
 		if app.camera.zoom > 1.5 {app.camera.zoom = 1.5}

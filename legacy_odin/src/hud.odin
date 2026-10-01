@@ -136,11 +136,25 @@ draw_hud :: proc(app: ^App) {
 	imgui.SetNextWindowSize({260, 0}, .FirstUseEver)
 	imgui.SetNextWindowPos({310, 10}, .FirstUseEver)
 	if imgui.Begin("Discovered Islands") {
-		imgui.Text("%d / %d found", app.discovered_island_count, app.island_count)
+		// Count non-PORT discovered islands
+		diplay_count := 0
+		for i in 0 ..< app.island_count {
+			if app.discovered_islands[i] && app.islands[i].production != .PORT {
+				diplay_count += 1
+			}
+		}
+		total_display := 0
+		for i in 0 ..< app.island_count {
+			if app.islands[i].production != .PORT {
+				total_display += 1
+			}
+		}
+		imgui.Text("%d / %d found", diplay_count, total_display)
 		imgui.Separator()
 		for i in 0 ..< app.island_count {
 			if !app.discovered_islands[i] {continue}
 			island := &app.islands[i]
+			if island.production == .PORT {continue}
 			name := get_name(island^)
 			imgui.TextColored({0, 0.9, 0.8, 1}, "%s", name)
 			imgui.TextDisabled("  %s — rate %.1f", resource_names[island.production], island.rate)
